@@ -139,9 +139,14 @@ export function ReaderApp({ api, t, diag, ctx, workspace: sharedWorkspace }) {
     if (!sharedWorkspace) for (const session of readerSessions.values()) session.translate?.dispose()
   }, [readerSessions, sharedWorkspace])
   const autoTranslate = state.settings.ai.translate?.auto !== false
+  const translationBatchSize = state.settings.ai.translate?.batchSize
+  const translationConcurrency = state.settings.ai.translate?.concurrency
   React.useEffect(() => {
-    for (const session of readerSessions.values()) session.translate?.setAutomatic(autoTranslate)
-  }, [autoTranslate, readerSessions])
+    for (const {translate} of readerSessions.values()) {
+      translate?.setAutomatic(autoTranslate)
+      translate?.setScheduling?.({batchSize:translationBatchSize,concurrency:translationConcurrency})
+    }
+  }, [autoTranslate, translationBatchSize, translationConcurrency, readerSessions])
 
   // ----- toasts ---------------------------------------------------------------------
   const dismissToast = React.useCallback((id) => {

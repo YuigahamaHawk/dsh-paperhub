@@ -36,7 +36,7 @@
 
 ### 逐段翻译
 
-在顶部选择目标语言，一键翻译全文。每段译文紧跟对应原文，阅读时可以直接对照。自动翻译会先处理当前视野内的段落，其余段落在后台继续。
+在顶部选择目标语言，一键翻译全文。每段译文完成后就会显示在原文下方，方便边译边读。自动翻译优先处理当前视野内的段落，其余段落在后台继续。
 
 <!-- 待录动图。打开翻译，展示计数推进和中英段落交错。
 ![一键翻译与逐段双语对照](docs/media/bilingual-reading.gif)
@@ -78,7 +78,7 @@
 安装 DeepSeek Harness 桌面版后，在左栏打开 **插件 → 添加插件**，填入以下安装地址。 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
 
 ```text
-github:YuigahamaHawk/dsh-paperhub#v1.0.2
+github:YuigahamaHawk/dsh-paperhub#v1.0.3
 ```
 
 重启 DSH，在 **插件** 页确认 dsh-paperhub 已启用，再从左侧打开 **Library（书库）**。点击 **导入** 加入第一篇 PDF 或 EPUB。打开文献后，PDF 可切换 **精排 / 原版**，点击顶部的翻译按钮开始对照阅读。

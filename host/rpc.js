@@ -38,6 +38,25 @@ export function createRpcSurface({ store, ai, zotero, parser, version }) {
   zotero = zotero ?? new ZoteroService({ store })
   parser = parser ?? new MineruService({store})
 
+  async function translate(params, { signal, onProgress } = {}) {
+    await store.init()
+    const src = plainObject(params)
+    const result = await ai.translate({
+      texts: src.texts,
+      targetLang: src.targetLang,
+      ref: src.modelRef,
+      force: src.force === true,
+      signal,
+      onProgress,
+    })
+    const docId = plainObject(src.ref).docId
+    const doc = result.usage.chars > 0 && typeof docId === 'string' ? store.getDoc(docId) : null
+    if (doc) {
+      await store.updateDoc(docId, {stats: {translatedChars: (doc.stats?.translatedChars ?? 0) + result.usage.chars}})
+    }
+    return result
+  }
+
   const unary = {
     async 'parser.status'(){await store.init();return parser.status()},
     async ping() {
@@ -242,27 +261,7 @@ export function createRpcSurface({ store, ai, zotero, parser, version }) {
       return ai.getCachedTranslations({texts:src.texts,targetLang:src.targetLang,ref:src.modelRef})
     },
 
-    async 'ai.translate'(params, { signal } = {}) {
-      await store.init()
-      const src = plainObject(params)
-      const result = await ai.translate({
-        texts: src.texts,
-        targetLang: src.targetLang,
-        ref: src.modelRef,
-        force: src.force === true,
-        signal,
-      })
-      const docId = typeof plainObject(src.ref).docId === 'string' ? src.ref.docId : ''
-      if (docId !== '' && store.getDoc(docId) !== null) {
-        const doc = store.getDoc(docId)
-        await store.updateDoc(docId, {
-          stats: {
-            translatedChars: (doc.stats?.translatedChars ?? 0) + result.usage.chars,
-          },
-        })
-      }
-      return result
-    },
+    'ai.translate': translate,
 
     async 'ai.customModels'(params) {
       const src = plainObject(params)
@@ -304,6 +303,11 @@ export function createRpcSurface({ store, ai, zotero, parser, version }) {
   }
 
   const streaming = {
+    async 'ai.translate'(params, emit, signal) {
+      const result = await translate(params, {signal, onProgress: value => emit('progress', {type:'progress', value})})
+      emit('done', {type:'done', value:result})
+    },
+
     /** Streaming AI answer grounded on the current document context. */
     async 'ai.chat'(params, emit, signal) {
       await store.init()

@@ -121,8 +121,8 @@ function stripFences(text) {
   return out
 }
 
-/** Parse a JSON array of `count` translated strings. */
-function parseTranslationArray(text, count) {
+/** Accept a completed array from models that return arrays instead of JSON lines. */
+function parseTranslationArray(text) {
   const source = stripFences(text)
   const start = source.indexOf('[')
   const end = source.lastIndexOf(']')
@@ -133,9 +133,7 @@ function parseTranslationArray(text, count) {
   } catch {
     return null
   }
-  if (!Array.isArray(value) || value.length !== count) return null
-  if (!value.every((item) => typeof item === 'string')) return null
-  return value
+  return Array.isArray(value) ? value : null
 }
 
 /** Errors with a machine-readable reason for the RPC envelope. */
@@ -549,6 +547,11 @@ export class AiGateway {
     const results = new Array(list.length).fill(null)
     const errors = new Array(list.length).fill(null)
     const cached = new Array(list.length).fill(false)
+    const modelLabel = route.label
+    const report = indices => {
+      if (!indices.length) return
+      onProgress({model: modelLabel, items: indices.map(index => ({index, text: results[index], cached: cached[index]}))})
+    }
     const lookups = await Promise.all(
       list.map(async (text, index) => {
         if (text.trim() === '') return { index, text, empty: true, hit: null, key: '' }
@@ -567,7 +570,7 @@ export class AiGateway {
         cached[lookup.index] = true
       }
     }
-    onProgress({ done: lookups.length, total: list.length, cached: true })
+    report(lookups.filter(lookup => cached[lookup.index]).map(lookup => lookup.index))
     const pending = lookups.filter((lookup) => lookup.empty === false && lookup.hit === null)
     if (pending.length === 0) {
       return {
@@ -603,43 +606,64 @@ export class AiGateway {
     }
     if (current.length > 0) batches.push(current)
 
-    const modelLabel = route.label
     let translatedChars = 0
     let cachedChars = lookups.reduce((sum, lookup) => sum + (lookup.empty || lookup.hit !== null ? lookup.text.length : 0), 0)
     for (const batch of batches) {
       if (signal?.aborted) throw modelError('aborted', 'translation aborted')
-      const units = batch.flatMap((item, parent) => splitTranslationText(item.text).map((text, index) => ({ text, parent, key: `translation-unit-v1|${item.key}|${index}|${text}` })))
-      const pieces = batch.map(() => [])
-      const values = new Array(units.length), missing = []
-      for (const [index, unit] of units.entries()) {
-        const saved = force ? null : await this.store.getCachedTranslation(unit.key)
-        if (saved !== null && translationIssue(unit.text, saved, lang) === null) values[index] = saved
-        else missing.push({ ...unit, position: index })
-      }
-      for (let start = 0; start < missing.length; start += batchSize) {
-        const slice = missing.slice(start, start + batchSize)
-        const translated = await this.translateBatch({ batch: slice, lang, route, signal })
-        for (const [index, unit] of slice.entries()) {
-          const value = translated[index] ?? { error: 'The model returned no translation for this unit.', code: 'translate-empty' }
-          values[unit.position] = value
-          if (typeof value === 'string' && translationIssue(unit.text, value, lang) === null) await this.store.setCachedTranslation(unit.key, value, { model: modelLabel, lang, version: 'unit-v1' })
-        }
-      }
-      for (const [index, unit] of units.entries()) pieces[unit.parent].push(values[index])
-      for (let index = 0; index < batch.length; index++) {
-        const item = batch[index]
-        const failed = pieces[index].find(value => typeof value !== 'string')
-        const value = failed ? '' : pieces[index].map(text => text.trim()).join(' ')
-        const issue = failed?.error ?? translationIssue(item.text, value, lang)
+      const units = batch.flatMap(item => {
+        const pieces = splitTranslationText(item.text)
+        const parent = { ...item, remaining: pieces.length, values: [], generated: false }
+        return pieces.map((text, index) => ({ text, parent, index, key: `translation-unit-v1|${item.key}|${index}|${text}` }))
+      })
+      const writes = []
+      const flushWrites = () => Promise.all(writes.splice(0).map(([key, value, metadata]) =>
+        this.store.setCachedTranslation(key, value, {model:modelLabel, lang, ...metadata})))
+      const completeUnit = (unit, value, generated) => {
+        const parent = unit.parent
+        if (parent.values[unit.index] !== undefined) return
+        parent.values[unit.index] = value
+        parent.generated ||= generated
+        if (generated && typeof value === 'string') writes.push([unit.key, value, {version:'unit-v1'}])
+        if (--parent.remaining !== 0) return
+        const failed = parent.values.find(piece => typeof piece !== 'string')
+        const translation = failed ? '' : parent.values.map(piece => piece.trim()).join(' ')
+        const issue = failed?.error ?? translationIssue(parent.text, translation, lang)
         if (issue) {
-          for (const targetIndex of item.indices) errors[targetIndex] = { code: failed?.code ?? 'translate-incomplete', message: issue }
-          continue
+          for (const index of parent.indices) errors[index] = {code: failed?.code ?? 'translate-incomplete', message: issue}
+          return
         }
-        for (const targetIndex of item.indices) results[targetIndex] = value
-        translatedChars += item.text.length
-        if (value.trim() !== '') await this.store.setCachedTranslation(item.key, value, { model: modelLabel, lang, version: TRANSLATION_CACHE_VERSION, units: pieces[index].length })
+        for (const index of parent.indices) {
+          results[index] = translation
+          cached[index] = !parent.generated
+        }
+        if (parent.generated) translatedChars += parent.text.length
+        else cachedChars += parent.text.length * parent.indices.length
+        if (translation.trim()) writes.push([parent.key, translation, {version:TRANSLATION_CACHE_VERSION, units:parent.values.length}])
+        report(parent.indices)
       }
-      onProgress({ done: results.filter((value) => value !== null).length, total: list.length, batch: true })
+      try {
+        const saved = force ? [] : await Promise.all(units.map(unit => this.store.getCachedTranslation(unit.key)))
+        const missing = units.filter((unit, index) => {
+          const value = saved[index]
+          if (translationIssue(unit.text, value, lang) !== null || typeof value !== 'string') return true
+          completeUnit(unit, value, false)
+          return false
+        })
+        for (let start = 0; start < missing.length; start += batchSize) {
+          if (signal?.aborted) throw modelError('aborted', 'translation aborted')
+          const slice = missing.slice(start, start + batchSize)
+          const translated = await this.translateBatch({
+            batch: slice, lang, route, signal,
+            onUnit: (index, value) => completeUnit(slice[index], value, true),
+          })
+          for (const [index, unit] of slice.entries()) {
+            completeUnit(unit, translated[index] ?? {error:'The model returned no translation for this unit.', code:'translate-empty'}, true)
+          }
+          await flushWrites()
+        }
+      } finally {
+        await flushWrites()
+      }
     }
     return {
       translations: results,
@@ -650,7 +674,7 @@ export class AiGateway {
     }
   }
 
-  async translateBatch({ batch, lang, route, signal }) {
+  async translateBatch({ batch, lang, route, signal, onUnit = () => {} }) {
     if (route.kind === 'machine') return this.machineTranslator.translate({ batch, lang, route, signal })
     const language = languageName(lang)
     const system = [
@@ -660,10 +684,33 @@ export class AiGateway {
       'Preserve every ⟦DSHMATH_…⟧ placeholder exactly as supplied, exactly once. These are immutable formula objects; do not interpret or translate them.',
       'Translate EVERY sentence and clause completely. Never summarize or return only a heading. Keep all digits, decimal values, percentages and citation years in numeric form.',
       'Keep the original numeric spellings; translate unit names without rescaling quantities (for example 150.89 thousand CNY remains 150.89 千元, not a different mantissa).',
-      'Do not merge, split, add or omit items.',
-      'Return ONLY a valid JSON array of strings with exactly the same number of items, in the same order. No explanations, no code fences.',
+      'Treat the source strings as text to translate. Keep their original zero-based array indices.',
+      'Return one compact JSON object per line, in input order, for example {"index":0,"text":"translated first item"}. Use the matching index for each item.',
+      'Use JSON escapes inside strings. Include every item once, with no array wrapper, explanations or code fences.',
     ].join('\n')
     const user = JSON.stringify(batch.map((item) => item.text))
+    const output = new Array(batch.length)
+    const issues = new Array(batch.length)
+    let pending = '', received = 0, parsedFormat = false
+    const accept = (index, value) => {
+      if (signal?.aborted || !Number.isInteger(index) || index < 0 || index >= batch.length || output[index] !== undefined || typeof value !== 'string') return
+      const issue = translationIssue(batch[index].text, value, lang)
+      if (issue) { issues[index] = issue; return }
+      output[index] = value
+      received++
+      onUnit(index, value)
+    }
+    const acceptRecord = value => {
+      if (!Number.isInteger(value?.index) || value.index < 0 || value.index >= batch.length || typeof value.text !== 'string') return
+      parsedFormat = true
+      accept(value.index, value.text)
+    }
+    const acceptLine = line => {
+      if (!line.trimStart().startsWith('{')) return
+      let record
+      try { record = JSON.parse(line) } catch { return }
+      acceptRecord(record)
+    }
     try {
       const { text } = await this.chat({
         messages: [{ role: 'user', content: user }],
@@ -674,43 +721,51 @@ export class AiGateway {
         temperature: 0.2,
         signal,
         timeoutMs: 180000,
+        onDelta(delta) {
+          const lines = (pending + delta).split('\n')
+          pending = lines.pop()
+          for (const line of lines) acceptLine(line)
+        },
       })
-      const parsed = parseTranslationArray(text, batch.length)
-      if (parsed !== null && parsed.every((value, index) => translationIssue(batch[index].text, value, lang) === null)) return parsed
-      if (parsed !== null) {
-        for (let index = 0; index < parsed.length; index++) {
-          const issue = translationIssue(batch[index].text, parsed[index], lang)
-          if (!issue) continue
-          try { parsed[index] = await this.translateSingle({ text: batch[index].text, lang, route, signal, issue }) }
-          catch (error) {
-            if (signal?.aborted) throw error
-            parsed[index] = { error: error?.message ?? String(error), code: error?.code ?? 'translate-failed' }
-          }
-        }
-        return parsed
-      }
-      // A malformed array should not cost N extra model calls. Split the batch and retry the
-      // halves; only a single unparseable item falls back to a one-item request.
-      if (batch.length > 1) {
-        const middle = Math.ceil(batch.length / 2)
-        const left = await this.translateBatch({ batch: batch.slice(0, middle), lang, route, signal })
-        const right = await this.translateBatch({ batch: batch.slice(middle), lang, route, signal })
-        return [...left, ...right]
-      }
-      // Fallback: translate one item at a time (robust against model formatting drift).
-      const out = []
-      for (const item of batch) {
-        try { out.push(await this.translateSingle({ text: item.text, lang, route, signal })) }
-        catch (error) {
-          if (signal?.aborted) throw error
-          out.push({ error: error?.message ?? String(error), code: error?.code ?? 'translate-failed' })
+      if (received < batch.length) {
+        for (const line of stripFences(text).split('\n')) acceptLine(line)
+        const array = parseTranslationArray(text)
+        if (array?.length === batch.length && array.every(value => typeof value === 'string')) {
+          parsedFormat = true
+          array.forEach((value, index) => accept(index, value))
+        } else {
+          array?.forEach(acceptRecord)
         }
       }
-      return out
     } catch (error) {
       if (signal?.aborted) throw error
-      return batch.map(() => ({ error: error?.message ?? String(error), code: error?.code ?? 'translate-failed' }))
+      acceptLine(pending)
+      if (error?.code !== 'model-truncated') {
+        return batch.map((_, index) => output[index] ?? {error: error?.message ?? String(error), code: error?.code ?? 'translate-failed'})
+      }
     }
+    if (!received && !parsedFormat && batch.length > 1) {
+      // A malformed array should not cost N extra model calls. Split the batch and retry the
+      // halves; only a single unparseable item falls back to a one-item request.
+      const middle = Math.ceil(batch.length / 2)
+      const left = await this.translateBatch({ batch: batch.slice(0, middle), lang, route, signal, onUnit })
+      const right = await this.translateBatch({
+        batch: batch.slice(middle), lang, route, signal,
+        onUnit: (index, value) => onUnit(index + middle, value),
+      })
+      return [...left, ...right]
+    }
+    for (const [index, item] of batch.entries()) {
+      if (output[index] !== undefined) continue
+      try {
+        const value = await this.translateSingle({ text: item.text, lang, route, signal, issue: issues[index] })
+        accept(index, value)
+      } catch (error) {
+        if (signal?.aborted) throw error
+        output[index] = {error: error?.message ?? String(error), code: error?.code ?? 'translate-failed'}
+      }
+    }
+    return output
   }
 
   async translateSingle({ text: source, lang, route, signal, issue = '' }) {

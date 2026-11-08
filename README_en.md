@@ -36,7 +36,7 @@ Turn PDFs with multiple columns, wide figures, or equations into a continuous re
 
 ### Paragraph-by-paragraph translation
 
-Choose a target language in the toolbar and translate the entire document in one click. Each translation follows its source paragraph so you can compare them as you read. Automatic translation starts with the paragraphs on screen and continues through the rest of the document in the background.
+Choose a target language in the toolbar and translate the entire document in one click. Each finished translation appears beneath its source paragraph as soon as it is ready. Automatic translation starts with the paragraphs on screen and continues through the rest of the document in the background.
 
 <!-- Show translation progress and the alternating source and translated paragraphs.
 ![One-click translation and bilingual reading](docs/media/bilingual-reading.gif)
@@ -78,7 +78,7 @@ Original files, annotations, reflowed layouts, translations, and reading highlig
 Install DeepSeek Harness Desktop. Open **Plugins → Add plugin** and enter the following source. [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
 
 ```text
-github:YuigahamaHawk/dsh-paperhub#v1.0.2
+github:YuigahamaHawk/dsh-paperhub#v1.0.3
 ```
 
 Restart DSH and confirm that **dsh-paperhub** is enabled on the Plugins page. Open **Library** from the sidebar, then choose **Import** to add a PDF or EPUB. For a PDF, use **Reflow / Original** to switch views. Use the translation button in the toolbar to start bilingual reading.

@@ -46,7 +46,7 @@ function sameStats(left, right) {
  * Cache-first bilingual translation queue.
  *
  * @param {object} options
- * @param {object} options.api      reader API (`rpc('ai.translate', ...)`)
+ * @param {object} options.api      reader API with streaming translation
  * @param {object} options.settings host-mirrored settings
  * @param {string} [options.docId]  document id used for host stats
  * @param {Array}  [options.blocks] content blocks ({ id, text, kind })
@@ -55,8 +55,8 @@ function sameStats(left, right) {
 export function createTranslationService({ api, settings, docId, blocks, onStats, whenSettingsSaved } = {}) {
   const aiSettings = (settings && settings.ai) || FALLBACK_AI
   const translateSettings = aiSettings.translate || FALLBACK_AI.translate
-  const batchSize = Math.max(1, Math.min(12, Number(translateSettings.batchSize) || 6))
-  const concurrency = Math.max(1, Math.min(4, Number(translateSettings.concurrency) || 2))
+  let batchSize = Math.max(1, Math.min(12, Number(translateSettings.batchSize) || 6))
+  let concurrency = Math.max(1, Math.min(4, Number(translateSettings.concurrency) || 2))
 
   const blockIndex = translatableIndex(blocks)
   const blockIds = [...blockIndex.keys()]
@@ -78,6 +78,7 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
   const queue = []
   const queued = new Set()
   const inFlight = new Set()
+  const controllers = new Set()
   let activeBatches = 0
   let pumpTimer = 0
   const requested = new Map() // block ID → whether the request is automatic
@@ -148,11 +149,6 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
     if (notifyScheduled || disposed) return
     notifyScheduled = true
     Promise.resolve().then(notifyNow)
-  }
-
-  function setEntry(id, entry) {
-    entries.set(id, entry)
-    refresh()
   }
 
   function enqueue(id, automatic = false) {
@@ -228,61 +224,76 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
     pumpTimer = setTimeout(() => {
       pumpTimer = 0
       pump()
-    }, 140)
+    }, 40)
   }
 
   async function runBatch(ids) {
     const batchGeneration = generation
     const ref = modelRef
+    const controller = new AbortController()
+    controllers.add(controller)
     for (const id of ids) {
       inFlight.add(id)
-      setEntry(id, { status: 'loading' })
+      entries.set(id, {status:'loading'})
     }
+    refresh()
     const texts = ids.map((id) => blockIndex.get(id)?.text ?? '')
+    const isCurrent = () => !disposed && batchGeneration === generation
+    const completed = new Set()
+    const accept = (index, value, cached, model) => {
+      const id = ids[index], source = texts[index]
+      if (id === undefined || completed.has(index) || blockIndex.get(id)?.text !== source ||
+          typeof value !== 'string' || (!value.trim() && source.trim())) return
+      completed.add(index)
+      forced.delete(id)
+      isolated.delete(id)
+      entries.set(id, {status:'done',text:value,source,cached:cached === true,model})
+    }
+    const onProgress = progress => {
+      if (!isCurrent() || !Array.isArray(progress?.items)) return
+      const model = typeof progress.model === 'string' ? progress.model : ''
+      for (const item of progress.items) if (Number.isInteger(item?.index)) accept(item.index, item.text, item.cached, model)
+      if (model) metrics.model = model
+      refresh()
+    }
     try {
-      if (api === null || api === undefined || typeof api.rpc !== 'function') throw new Error('reader API is unavailable')
+      if (typeof api?.stream !== 'function' && typeof api?.rpc !== 'function') throw new Error('reader API is unavailable')
       if ('scope' in ref) await whenSettingsSaved?.()
-      if (disposed || batchGeneration !== generation) return
-      const result = await api.rpc('ai.translate', { texts, targetLang: lang, modelRef: ref, force: ids.some(id => forced.has(id)), ref: { docId } })
-      if (disposed || batchGeneration !== generation) return
+      if (!isCurrent()) return
+      const params = { texts, targetLang: lang, modelRef: ref, force: ids.some(id => forced.has(id)), ref: { docId } }
+      const result = typeof api?.stream === 'function'
+        ? await api.stream('ai.translate', params, {onProgress}, controller.signal)
+        : await api.rpc('ai.translate', params, {signal:controller.signal})
+      if (!isCurrent()) return
       const translations = Array.isArray(result?.translations) ? result.translations : []
       const cached = Array.isArray(result?.cached) ? result.cached : []
       const failures = Array.isArray(result?.errors) ? result.errors : []
+      const model = typeof result?.model === 'string' ? result.model : ''
       for (let index = 0; index < ids.length; index++) {
-        if (blockIndex.get(ids[index])?.text !== texts[index]) { entries.delete(ids[index]); continue }
+        const id = ids[index], source = texts[index]
+        if (completed.has(index) || blockIndex.get(id)?.text !== source) continue
         if (failures[index]) {
-          setEntry(ids[index], { status: 'error', source: texts[index], error: failures[index].message ?? String(failures[index]), code: failures[index].code })
-          continue
+          entries.set(id, {status:'error',source,error:failures[index].message ?? String(failures[index]),code:failures[index].code})
+        } else {
+          accept(index, translations[index] ?? '', cached[index], model)
+          if (!completed.has(index)) entries.set(id, {status:'error',source,error:'The translation was empty. Retry this paragraph.'})
         }
-        const value = typeof translations[index] === 'string' ? translations[index] : ''
-        if (!value.trim() && texts[index].trim()) {
-          setEntry(ids[index], { status: 'error', error: 'The translation was empty. Retry this paragraph.' })
-          continue
-        }
-        forced.delete(ids[index])
-        isolated.delete(ids[index])
-        setEntry(ids[index], {
-          status: 'done',
-          text: value,
-          source: texts[index],
-          cached: cached[index] === true,
-          model: typeof result?.model === 'string' ? result.model : '',
-        })
       }
       const usage = result?.usage
       if (usage !== null && typeof usage === 'object') {
         metrics.usageChars += Number(usage.chars) || 0
         metrics.cachedChars += Number(usage.cachedChars) || 0
       }
-      if (typeof result?.model === 'string' && result.model !== '') metrics.model = result.model
+      if (model) metrics.model = model
     } catch (error) {
-      if (disposed || batchGeneration !== generation) return
+      if (!isCurrent()) return
       const message = error?.message ?? String(error)
       for (const [index, id] of ids.entries()) {
-        if (blockIndex.get(id)?.text !== texts[index]) { entries.delete(id); continue }
-        setEntry(id, { status: 'error', error: message })
+        if (completed.has(index) || blockIndex.get(id)?.text !== texts[index]) continue
+        entries.set(id, {status:'error',source:texts[index],error:message,code:error?.code})
       }
     } finally {
+      controllers.delete(controller)
       for (const id of ids) {
         inFlight.delete(id)
         if (requested.has(id) && blockIndex.has(id) && !entries.has(id)) enqueue(id, requested.get(id))
@@ -345,6 +356,12 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
       syncAutomatic()
       pulse()
     },
+    setScheduling(next) {
+      if (disposed) return
+      batchSize = Math.max(1, Math.min(12, Number(next?.batchSize) || 6))
+      concurrency = Math.max(1, Math.min(4, Number(next?.concurrency) || 2))
+      if (queue.length) schedulePump()
+    },
     /** Queue every translatable block of the document (explicit "translate all" action). */
     requestAll() {
       for (const id of blockIds) enqueue(id)
@@ -356,7 +373,7 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
       const round=generation,currentLang=lang,ref={...modelRef}
       if ('scope' in ref) await whenSettingsSaved?.()
       if (disposed || round !== generation) return 0
-      const ids=blockIds.filter(id=>entries.get(id)?.status!=='done'&&!inFlight.has(id))
+      const ids=blockIds.filter(id=>entries.get(id)?.status!=='done'&&!inFlight.has(id)&&!forced.has(id))
       let count=0
       for(let start=0;start<ids.length;start+=1000){
         const slice=ids.slice(start,start+1000),texts=slice.map(id=>blockIndex.get(id)?.text??'')
@@ -364,9 +381,11 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
         if(disposed||generation!==round)return count
         for(const [index,id] of slice.entries()){
           const value=result?.translations?.[index]
-          if(typeof value!=='string'||!value.trim()||blockIndex.get(id)?.text!==texts[index]||inFlight.has(id)||entries.get(id)?.status==='done')continue
-          setEntry(id,{status:'done',source:texts[index],text:value,cached:true,model:result.model??''});count++
+          if(typeof value!=='string'||!value.trim()||blockIndex.get(id)?.text!==texts[index]||inFlight.has(id)||forced.has(id)||entries.get(id)?.status==='done')continue
+          entries.set(id,{status:'done',source:texts[index],text:value,cached:true,model:result.model??''});count++
         }
+        retainQueued(id => entries.get(id)?.status !== 'done')
+        refresh()
       }
       return count
     },
@@ -434,10 +453,10 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
     clear() {
       if (disposed) return
       generation += 1
+      for (const controller of controllers) controller.abort()
       entries.clear()
       queue.length = 0
       queued.clear()
-      inFlight.clear()
       requested.clear()
       forced.clear()
       isolated.clear()
@@ -459,6 +478,7 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
       if (pumpTimer !== 0) clearTimeout(pumpTimer)
       pumpTimer = 0
       generation += 1
+      for (const controller of controllers) controller.abort()
       queue.length = 0
       queued.clear()
       inFlight.clear()
@@ -473,6 +493,7 @@ export function createTranslationService({ api, settings, docId, blocks, onStats
 
   function restartRequested() {
     generation += 1
+    for (const controller of controllers) controller.abort()
     entries.clear(); queue.length = 0; queued.clear(); forced.clear(); isolated.clear()
     metrics.cachedChars = 0
     refresh()

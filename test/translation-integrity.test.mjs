@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { splitTranslationText, translationIssue } from '../shared/translation-contract.js'
 import { AiGateway } from '../host/ai.js'
+import { ReaderError } from '../host/util.js'
 import { translatableIndex } from '../shared/translation-blocks.js'
 import { createT } from '../client-src/i18n.js'
 
@@ -82,6 +83,76 @@ test('a failed item does not discard or mark neighboring successful translations
  const before=calls
  const cached=await gateway.translate({texts:['Good source A.']})
  assert.equal(cached.cached[0],true);assert.equal(calls,before)
+})
+
+test('indexed stream publishes complete validated passages before the model finishes or repairs a neighbor', { timeout:3000 }, async()=>{
+ const {gateway,cache}=fixture()
+ const source=['A cached total of 101.','A result with 44 observations.','A good result with 55 observations.']
+ cache.set('translation-v2|dsh|dsh:account:flash|zh-CN|'+source[0],'缓存合计 101。')
+ const ready=[]
+ let release,notify,calls=0
+ const gate=new Promise(resolve=>{release=resolve}), rowSent=new Promise(resolve=>{notify=resolve})
+ gateway.chat=async args=>{
+  calls++
+  if(calls>1) {
+   assert.equal(args.messages[0].content,source[1])
+   return {text:'完整结果含 44 次观测。'}
+  }
+  assert.deepEqual(JSON.parse(args.messages[0].content),source.slice(1))
+  const valid=JSON.stringify({index:1,text:'结果含 55 次观测。'})+'\n'
+  const invalid=JSON.stringify({index:0,text:'结果有所改善。'})+'\n'
+  args.onDelta(valid.slice(0,12))
+  args.onDelta(valid.slice(12)+invalid)
+  notify()
+  await gate
+  return {text:valid+invalid}
+ }
+ const pending=gateway.translate({texts:source,onProgress:event=>ready.push(...event.items)})
+ try {
+  await rowSent
+  assert.deepEqual(ready.map(item=>item.index),[0,2])
+  assert.equal(ready[0].cached,true)
+  assert.match(ready[1].text,/55/)
+ } finally {release()}
+ const result=await pending
+ assert.deepEqual(ready.map(item=>item.index),[0,2,1])
+ assert.match(result.translations[1],/44/)
+ assert.deepEqual(result.errors,[null,null,null])
+ assert.equal(calls,2)
+ assert.ok(![...cache.values()].includes('结果有所改善。'))
+})
+
+test('truncated indexed output keeps valid records and retries only the missing item', async()=>{
+ const {gateway}=fixture(), calls=[]
+ gateway.chat=async args=>{
+  calls.push(args.messages[0].content)
+  if(calls.length>1)return {text:'补全第 62 条。'}
+  args.onDelta('{"index":0,"text":"第 41 条完整译文。"}\n{"index":2,"text":"第 83 条完整译文。"}')
+  throw new ReaderError('model-truncated','Token limit reached.')
+ }
+ const texts=['Result 41.','Result 62.','Result 83.']
+ const result=await gateway.translate({texts})
+ assert.equal(calls.length,2)
+ assert.equal(calls[1],texts[1])
+ assert.deepEqual(result.translations,['第 41 条完整译文。','补全第 62 条。','第 83 条完整译文。'])
+})
+
+test('a long paragraph is only published after all its indexed units arrive', async()=>{
+ const {gateway}=fixture(), progress=[]
+ const source=('A detailed experiment compared 42 cases under controlled conditions. ').repeat(9)
+ assert.ok(splitTranslationText(source).length>1)
+ gateway.chat=async args=>{
+  const items=JSON.parse(args.messages[0].content)
+  const lines=items.map((text,index)=>JSON.stringify({index,text:'完整译文 '+text})+'\n')
+  args.onDelta(lines[0])
+  assert.deepEqual(progress,[])
+  for(const line of lines.slice(1))args.onDelta(line)
+  return {text:lines.join('')}
+ }
+ const result=await gateway.translate({texts:[source],onProgress:event=>progress.push(...event.items)})
+ assert.equal(progress.length,1)
+ assert.equal(progress[0].text,result.translations[0])
+ assert.equal(result.translations[0].match(/42/g).length,9)
 })
 
 test('retrying a failed long paragraph reuses good units and sends only the missing unit',async()=>{
