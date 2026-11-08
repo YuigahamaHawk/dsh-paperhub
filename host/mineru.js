@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process'
+import {createReadStream} from 'node:fs'
 import {access,readFile,unlink,stat} from 'node:fs/promises'
 import {join,isAbsolute} from 'node:path'
 import {freemem,homedir,totalmem} from 'node:os'
@@ -45,7 +46,13 @@ function parserExitError(stderr) {
   if (/Dml(?:ExecutionProvider|FusedConv)[^\r\n]*(?:8007000e|out of memory)|ptxas fatal\s*:\s*Memory allocation failure|CUDA[^\r\n]*out of memory|(?:VK_ERROR_OUT_OF_(?:DEVICE|HOST)_MEMORY|OutOfDeviceMemoryError)/i.test(message)) {
     return new ReaderError('parser-accelerator', 'The local MinerU accelerator could not allocate memory.')
   }
-  if (/OpenBLAS error:[^\r\n]*memory allocation|_ArrayMemoryError|(?:^|\n)MemoryError\b/i.test(message)) {
+  const nativeAllocation = /\b(?:bad[\s_]+alloc(?:ation)?|out of (?:device |host )?memory|(?:failed|unable|could not) to allocate memory)\b/i
+  if (message.split(/\r?\n/).some(line => /\bonnxruntime/i.test(line) && nativeAllocation.test(line))) {
+    // MinerU can hold an accelerated session and a second CPU session for short formula batches.
+    return new ReaderError('parser-model-memory', 'A local MinerU model could not allocate memory.')
+  }
+  if (nativeAllocation.test(message) ||
+      /OpenBLAS error:[^\r\n]*memory allocation|_ArrayMemoryError|(?:^|\n)MemoryError\b|WinError 1455\b/i.test(message)) {
     return new ReaderError('parser-memory', 'MinerU ran out of memory during local PDF parsing.')
   }
   if (/PDF render worker (?:exited|disconnected|\w+Error:)|PDF render session timed out/i.test(message)) {
@@ -87,17 +94,33 @@ export class MineruService {
     return new Promise((resolve,reject)=>{
       const child=this.launch(python,[bridge,...args],{windowsHide:true,shell:false,env})
       this.children.add(child)
-      let output='',errors='',pending='',timedOut=false
+      let output='',errors='',pending='',timedOut=false,reportedError
       const stop=()=>child.kill(),timer=setTimeout(()=>{timedOut=true;stop()},timeoutMs)
       signal?.addEventListener('abort',stop,{once:true});if(signal?.aborted)stop()
-      child.stdout.on('data',chunk=>{output+=chunk;pending+=chunk;if(output.length>1000000){output=output.slice(-1000000)};const lines=pending.split(/\r?\n/);pending=lines.pop();for(const line of lines)try{const value=JSON.parse(line);if(value.stage)onProgress(value)}catch{}})
+      child.stdout.on('data', chunk => {
+        output = (output + chunk).slice(-1000000)
+        const lines = (pending + chunk).split(/\r?\n/)
+        pending = lines.pop()
+        for (const line of lines) {
+          try {
+            const value = JSON.parse(line)
+            if (value?.error === 'parser-commit-low' && Number.isInteger(value.availableMiB) && value.availableMiB >= 0) {
+              reportedError = new ReaderError('parser-commit-low', `Windows has only ${value.availableMiB} MiB of available committed memory.`)
+            } else if (value?.stage) {
+              onProgress(value)
+            }
+          } catch {}
+        }
+      })
       child.stderr.on('data',chunk=>{errors=(errors+chunk).slice(-48000)})
-      child.on('error',finish)
+      child.on('error', error => finish(error.code === 'ENOMEM'
+        ? new ReaderError('parser-memory', 'MinerU could not start because memory is unavailable.')
+        : error))
       child.on('close',code=>{
         if(code===0)return finish(null)
         if(signal?.aborted)return finish(new ReaderError('aborted','已停止本机解析'))
         if(timedOut)return finish(new ReaderError('parser-timeout','本机解析超时，原有内容已保留'))
-        finish(parserExitError(errors))
+        finish(reportedError ?? parserExitError(errors))
       })
       let settled=false
       const children=this.children
@@ -141,7 +164,7 @@ export class MineruService {
         return await attempt(pages)
       } catch (error) {
         if (signal.aborted) throw error
-        if (error.code === 'parser-accelerator' && recovery !== 'cpu') {
+        if ((error.code === 'parser-accelerator' || error.code === 'parser-model-memory') && recovery !== 'cpu') {
           recovery = 'cpu'
         } else if (!recovery && (error.code === 'parser-memory' || error.code === 'parser-render-worker')) {
           recovery = 'serial'
@@ -199,10 +222,12 @@ export class MineruService {
     const combined=signal?AbortSignal.any([signal,marker.controller.signal]):marker.controller.signal
     let task
     try{
-      const original=join(this.store.paths.docDir(id),'original.pdf'),bytes=await readFile(original),status=await this.status()
+      const original=join(this.store.paths.docDir(id),'original.pdf'),hash=createHash('sha256')
+      for await (const chunk of createReadStream(original,{signal:combined})) hash.update(chunk)
+      const status=await this.status()
       if(combined.aborted)throw new ReaderError('aborted','已停止本机解析')
       if(!status.available)throw new ReaderError('parser-unavailable',status.message)
-      const baseKey=`mineru-local-v2-${status.version}|${status.tier}|image-analysis-off|${createHash('sha256').update(bytes).digest('hex')}`
+      const baseKey=`mineru-local-v2-${status.version}|${status.tier}|image-analysis-off|${hash.digest('hex')}`
       const key = pages ? baseKey + '|pages:' + pages.join(',') : baseKey
       if(!force){const cached=await this.store.getCachedReflow(key);if(coversPages(cached,pages,doc.pageCount))return{...cached,cached:true}}
       onProgress({stage:'queued',local:true,tier:status.tier})
@@ -218,6 +243,9 @@ export class MineruService {
       if(combined.aborted)throw new ReaderError('aborted','已停止本机解析')
       if (result.recovery !== 'pages' && coversPages(result,pages,doc.pageCount)) await this.store.setCachedReflow(key,result)
       return {...result,cached:false}
+    } catch (error) {
+      if (combined.aborted) throw new ReaderError('aborted','已停止本机解析')
+      throw error
     }finally{if(marker.started&&combined.aborted)await task?.catch(()=>{});if(this.running.get(id)===marker)this.running.delete(id);await unlink(output).catch(()=>{});await unlink(output+'.part').catch(()=>{})}
   }
 }

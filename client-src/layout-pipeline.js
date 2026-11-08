@@ -40,9 +40,11 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
   const priorEngine = /^MinerU\b/.test(recordedModel) ? 'mineru' : recordedModel ? 'vision' : content.parser?.engine ?? allPages.find(page => page.vision?.engine)?.vision.engine
   const local = retryFailed && priorEngine ? priorEngine === 'mineru' : parser?.engine==='mineru'||parser?.engine==='auto'&&parser?.available
   if(local){
+    // A whole-document MinerU failure can leave every page of a previous layout readable.
+    const retryWhole = retryFailed && content.visionLayoutErrors?.some(error => error.page == null)
     onProgress({stage:'local-parser',done:0,total:allPages.length,engine:'mineru'})
     try{
-      const pageNumbers = retryFailed && pending.length && pending.length < allPages.length ? pending : undefined
+      const pageNumbers = retryFailed && !retryWhole && pending.length && pending.length < allPages.length ? pending : undefined
       let recoveryProfile
       const parsed = await api.stream('parser.parse', {id:doc.id, force:force || retryFailed, pageNumbers}, {
         onProgress: progress => {
@@ -51,7 +53,7 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
         },
       }, signal)
       check()
-      const selected = retryFailed ? { ...current, pages: allPages.filter(page => pending.includes(page.n)) } : current
+      const selected = pageNumbers ? { ...current, pages: allPages.filter(page => pageNumbers.includes(page.n)) } : current
       const layout=mineruLayout(selected,parsed.middle,{cached:parsed.cached,tier:parsed.tier}),failed=layout.pages.filter(page=>page.error).map(page=>({page:page.n,message:page.error}))
       const targets = new Map(layout.pages.filter(canCheckFigureGeometry).map(page => [page.n, page]))
       if (targets.size) {
@@ -75,7 +77,7 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
       return {content:current,complete,errors:failed,cachedPages:parsed.cached?layout.pages.length:0,regions:applied.regions,model:layout.model}
     }catch(error){
       check()
-      const failed=allPages.filter(page=>retryFailed?pending.includes(page.n):!page.vision).map(page=>({page:page.n,message:String(error.message??error)}))
+      const failed=allPages.filter(page=>retryFailed&&!retryWhole?pending.includes(page.n):!page.vision).map(page=>({page:page.n,message:String(error.message??error)}))
       if(!failed.length)failed.push({page:null,message:String(error.message??error)})
       await publish(latest=>({...keepFailedPagesOriginal(latest,failed),visionLayoutStatus:'partial',visionLayoutErrors:failed,visionLayoutModel:'MinerU · local'}))
       throw error

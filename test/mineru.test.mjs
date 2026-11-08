@@ -108,6 +108,26 @@ test('retrying a failed MinerU page preserves earlier page blocks even if settin
  assert.equal(result.content.pages[1].vision.engine,'mineru')
  assert.equal(result.content.visionLayoutPages,2)
 })
+
+test('retrying a whole-document MinerU failure replaces the previous visual layout only after parsing',async()=>{
+ const {page,parsed}=example()
+ const previous={...page,blocks:[{id:'existing',kind:'paragraph',text:'Previously arranged by the vision model.'}],vision:{version:VISION_LAYOUT_VERSION,engine:'vision',regions:0}}
+ const content={kind:'pdf',pageCount:1,pages:[previous],visionLayoutStatus:'partial',visionLayoutModel:'MinerU · local',visionLayoutErrors:[{page:null,message:'Model allocation failed'}]}
+ const api={
+  rpc:async method=>method==='parser.status'?{engine:'mineru'}:{},
+  stream:async (method,params)=>{
+   assert.equal(method,'parser.parse')
+   assert.equal(params.force,true)
+   assert.equal(params.pageNumbers,undefined)
+   return {middle:{pages:[parsed]},tier:'basic'}
+  },
+ }
+ const result=await runVisualLayout({api,doc:{id:'doc'},content,retryFailed:true})
+ assert.equal(result.complete,true)
+ assert.equal(result.content.pages[0].vision.engine,'mineru')
+ assert.equal(result.content.parser.tier,'basic')
+ assert.deepEqual(result.content.pages[0].sourceBlocks,page.sourceBlocks)
+})
 test('local failure retains an original-page fallback and never silently invokes a paid model',async()=>{
  const {content}=example(),methods=[],saves=[]
  const api={rpc:async(method,params)=>{if(method==='parser.status')return{available:true,engine:'mineru'};if(method==='content.save')saves.push(params.content);return{}},stream:async method=>{methods.push(method);throw new Error('Local model unavailable')}}
@@ -173,6 +193,9 @@ test('MinerU reports memory exhaustion and unexpected worker exits without a Pyt
   ['OpenBLAS error: Memory allocation still failed after 10 retries\nRuntimeError: PDF render worker exited: 1','parser-memory'],
   ['numpy._core._exceptions._ArrayMemoryError: Unable to allocate 5.18 MiB','parser-memory'],
   ['DmlFusedConv\0 failed with HRESULT 8007000E\0\nUnicodeDecodeError: invalid continuation byte','parser-accelerator'],
+  ['onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : FAIL : Load model from model.onnx failed:bad allocation','parser-model-memory'],
+  ['onnxruntime.capi.onnxruntime_pybind11_state.RuntimeException: [ONNXRuntimeError] : RUNTIME_EXCEPTION : running Loop node. Status Message: std::bad_alloc','parser-model-memory'],
+  ['OSError: [WinError 1455] The paging file is too small for this operation to complete','parser-memory'],
   ['RuntimeError: PDF render worker exited: 1','parser-render-worker'],
  ]
  for(const [stderr,code] of cases) {
@@ -187,6 +210,47 @@ test('MinerU reports memory exhaustion and unexpected worker exits without a Pyt
   service.python=async()=>'/isolated/python'
   await assert.rejects(service.run(['--status']),error=>error.code===code&&!error.message.includes('RuntimeError'))
  }
+})
+
+test('critical Windows commit pressure stops parsing before a second launch',async()=>{
+ const {dir,service,docs}=await serviceFixture()
+ service.python=async()=>'/isolated/python'
+ let launches=0
+ service.launch=()=>{
+  launches++
+  const child=new EventEmitter()
+  child.stdout=new EventEmitter()
+  child.stderr=new EventEmitter()
+  setImmediate(()=>{
+   child.stdout.emit('data','{"error":"parser-commit-')
+   child.stdout.emit('data','low","availableMiB":200}\n')
+   child.emit('close',1)
+  })
+  return child
+ }
+ try {
+  await assert.rejects(service.parse({id:docs[0].id}),error=>error.code==='parser-commit-low'&&error.message.includes('200 MiB'))
+  assert.equal(launches,1)
+ } finally {service.dispose();await cleanup(dir)}
+})
+
+test('a Basic ONNX allocation failure uses one fresh CPU attempt at the same tier',async()=>{
+ const {dir,service,docs}=await serviceFixture()
+ service.status=async()=>({available:true,version:'4.test',tier:'basic'})
+ const attempts=[]
+ service.run=async(args,{env})=>{
+  attempts.push({args,env})
+  if(attempts.length===1)throw new ReaderError('parser-model-memory','Allocation failed')
+  await writeFile(args[args.indexOf('--output')+1],JSON.stringify({middle:{pages:[{page_idx:0,blocks:[]}]},tier:'basic'}))
+ }
+ try {
+  const result=await service.parse({id:docs[0].id})
+  assert.equal(result.recovery,'cpu')
+  assert.equal(attempts.length,2)
+  assert.ok(attempts.every(({args})=>args[args.indexOf('--tier')+1]==='basic'))
+  assert.equal(attempts[1].env.MINERU_MODEL_ONNX_DEVICE,'cpu')
+  assert.equal(attempts[1].env.MINERU_PROCESSING_WINDOW_SIZE,'1')
+ } finally {service.dispose();await cleanup(dir)}
 })
 
 test('runtime memory failures retry serially, then accelerator failure switches only this attempt to CPU',async()=>{
