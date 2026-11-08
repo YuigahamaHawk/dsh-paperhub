@@ -1,0 +1,52 @@
+{
+  "name": "@local/dsh-reader",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "An AI-powered literature library and reader for DeepSeek Harness with PDF and EPUB import, bilingual reading, annotations, and Zotero sync.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YuigahamaHawk/dsh-paperhub.git"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "README_en.md",
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "docs/media/study-map.png",
+    "host/**",
+    "shared/**",
+    "assets/**",
+    "tools/mineru_bridge.py"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0",
+    "pdfjs-dist": "4.10.38"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/host.test.mjs && node test/refine.test.mjs && node test/latex.test.mjs && node test/layout.test.mjs && node test/pipeline.test.mjs && node test/layout-plan.test.mjs && node test/vision.test.mjs && node --test test/visual-pipeline.test.mjs test/figure-geometry.test.mjs test/model-routes.test.mjs test/pdf-geometry.test.mjs test/pdf-render-queue.test.mjs test/translation-integrity.test.mjs test/translation-queue.test.mjs test/machine-translation.test.mjs test/toc.test.mjs test/inline-math.test.mjs test/parser-inline.test.mjs test/workspace.test.mjs test/recovery.test.mjs test/media-index.test.mjs test/import.test.mjs test/mineru.test.mjs test/study-map.test.mjs && node test/plugin.test.mjs && node --test test/build.test.mjs && node tools/check.mjs && node tools/mock-activate.cjs client.js",
+    "fixtures": "node tools/make-fixtures.mjs"
+  },
+  "dependencies": {
+    "katex": "0.19.1"
+  }
+}

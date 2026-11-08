@@ -1,0 +1,3 @@
+- insert:
+    - id: reader
+      name: '@local/dsh-reader'

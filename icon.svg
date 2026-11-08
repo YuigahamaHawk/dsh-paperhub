@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">dsh-paperhub</title>
+  <rect x="4" y="4" width="56" height="56" rx="12" fill="#162840"/>
+  <path d="M16 22v25a3 3 0 0 0 3 3h21" fill="none" stroke="#7893ad" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M23 14h15l8 8v22a2 2 0 0 1-2 2H23a2 2 0 0 1-2-2V16a2 2 0 0 1 2-2Z" fill="#f4f8fb"/>
+  <path d="M38 14v6a2 2 0 0 0 2 2h6Z" fill="#aabed0"/>
+  <path d="M27 27h12m-12 6h8m-8 6h5" fill="none" stroke="#526d87" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="m45 30 2.1 6.9L54 39l-6.9 2.1L45 48l-2.1-6.9L36 39l6.9-2.1Z" fill="#49cdb4" stroke="#162840" stroke-width="1.8" stroke-linejoin="round"/>
+</svg>

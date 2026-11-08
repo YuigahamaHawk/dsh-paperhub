@@ -1,0 +1,38 @@
+"""Small public-SDK adapter. The reader supplies only its stored PDF and an output path."""
+import argparse,json,pathlib,time,importlib.metadata,os
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--status',action='store_true')
+    parser.add_argument('--input')
+    parser.add_argument('--output')
+    parser.add_argument('--tier',choices=['basic','standard'],default='standard')
+    args=parser.parse_args()
+    version=importlib.metadata.version('mineru')
+    if not version.startswith('4.'):
+        raise RuntimeError('Reader requires MinerU 4.x middle JSON')
+    # Reading never starts a weight download or uses a configured remote VLM endpoint.
+    os.environ['MINERU_MODEL_SOURCE']='local'
+    os.environ['MINERU_MODEL_VLM_SERVER_URL']=''
+    os.environ['MINERU_TELEMETRY_DISABLED']='1'
+    from mineru.model.registry import model_repos_for_tier
+    from mineru.model.download import verify_model_repo
+    missing=[repo.name for repo in model_repos_for_tier(args.tier) if not verify_model_repo(repo).ready]
+    if missing:
+        raise RuntimeError('MinerU local models missing: '+', '.join(missing)+'. Install models explicitly before parsing.')
+    if args.status:
+        print(json.dumps({'version':version,'local':True}),flush=True)
+        return
+    from mineru import parse
+    started=time.monotonic()
+    print(json.dumps({'stage':'parsing','version':version,'tier':args.tier}),flush=True)
+    result=parse(args.input,tier=args.tier,image_analysis=False)
+    output=pathlib.Path(args.output)
+    value={'middle':result.to_dict(),'elapsedMs':round((time.monotonic()-started)*1000),'version':version,'tier':args.tier,'local':True}
+    temporary=output.with_name(output.name+'.part')
+    temporary.write_text(json.dumps(value,ensure_ascii=False),encoding='utf8')
+    temporary.replace(output)
+    print(json.dumps({'stage':'complete','elapsedMs':value['elapsedMs'],'pages':len(result.pages)}),flush=True)
+
+if __name__=='__main__':
+    main()
