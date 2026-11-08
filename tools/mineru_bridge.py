@@ -7,6 +7,7 @@ def main():
     parser.add_argument('--input')
     parser.add_argument('--output')
     parser.add_argument('--tier',choices=['basic','standard'],default='standard')
+    parser.add_argument('--page-range',default='')
     args=parser.parse_args()
     version=importlib.metadata.version('mineru')
     if not version.startswith('4.'):
@@ -26,7 +27,7 @@ def main():
     from mineru import parse
     started=time.monotonic()
     print(json.dumps({'stage':'parsing','version':version,'tier':args.tier}),flush=True)
-    result=parse(args.input,tier=args.tier,image_analysis=False)
+    result=parse(args.input,tier=args.tier,image_analysis=False,page_range=args.page_range)
     output=pathlib.Path(args.output)
     value={'middle':result.to_dict(),'elapsedMs':round((time.monotonic()-started)*1000),'version':version,'tier':args.tier,'local':True}
     temporary=output.with_name(output.name+'.part')

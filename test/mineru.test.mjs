@@ -4,8 +4,9 @@ import {mkdtemp,rm,writeFile,readdir} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join,dirname,resolve} from 'node:path'
 import {EventEmitter} from 'node:events'
-import {MineruService} from '../host/mineru.js'
+import {MineruService,mineruProcessEnv} from '../host/mineru.js'
 import {ReaderStore} from '../host/store.js'
+import {ReaderError} from '../host/util.js'
 import {mineruPageLayout,mineruLayout} from '../shared/mineru-layout.js'
 import {applyVisionLayout} from '../client-src/vision-layout.js'
 import {runVisualLayout,keepFailedPagesOriginal,hasCurrentVisualLayout} from '../client-src/layout-pipeline.js'
@@ -49,6 +50,9 @@ test('a scanned page creates OCR source anchors, and missing returned pages rema
  const answer=mineruPageLayout({n:1,blocks:[],width:600,height:800},parsed)
  assert.equal(answer.ocr,true);assert.equal(answer.sourceBlocks[0].text,'OCR paragraph with actual text.')
  const result=mineruLayout({pages:[{n:1,blocks:[]},{n:2,blocks:[]}]},{pages:[parsed]});assert.match(result.pages[1].error,/did not return/)
+ const unreadScan={n:1,sourceBlocks:[],blocks:[{kind:'pageFigure'}]}
+ const unread=mineruLayout({pages:[unreadScan]},{pages:[{page_idx:0,blocks:[]}]})
+ assert.match(unread.pages[0].error,/original page is kept/)
 })
 test('table structure takes precedence over a missing or nonstandard caption label',()=>{
  const media=buildMediaIndex([{id:'table',kind:'figure',structure:'table',alt:'Reward specifications'},{id:'eq',kind:'formula',number:'7'}])
@@ -91,9 +95,11 @@ test('retrying a failed MinerU page preserves earlier page blocks even if settin
  const content={kind:'pdf',pageCount:2,pages:[first,{...page,n:2}],visionLayoutStatus:'partial',visionLayoutModel:'MinerU test',visionLayoutErrors:[{page:2,message:'failed'}]}
  const api={
   rpc:async method=>method==='parser.status'?{engine:'vision'}:{},
-  stream:async method=>{
+  stream:async (method,params)=>{
    assert.equal(method,'parser.parse')
-   return {middle:{pages:[parsed,{...parsed,page_idx:1}],metadata:{producer:{version:'4.test'}}},cached:true}
+   assert.equal(params.force,true)
+   assert.deepEqual(params.pageNumbers,[2])
+   return {middle:{pages:[{...parsed,page_idx:1}],metadata:{producer:{version:'4.test'}}},cached:false}
   },
  }
  const result=await runVisualLayout({api,doc:{id:'doc'},content,retryFailed:true})
@@ -141,4 +147,113 @@ test('subprocess runner passes argument arrays without a shell, times out and ki
  const service=new MineruService({store:{},launch});service.python=async()=>'/isolated/python'
  await assert.rejects(service.run(['--status'],{timeoutMs:5}),/超时/)
  const controller=new AbortController(),running=service.run(['--status'],{signal:controller.signal});controller.abort();await assert.rejects(running,error=>error.code==='aborted');assert.equal(service.children.size,0)
+})
+
+test('MinerU bounds Windows parser workers and page windows when memory is limited',()=>{
+ const gib=1024**3
+ const env={MINERU_PROCESSING_WINDOW_SIZE:'64',MINERU_PDF_RENDER_THREADS:'8',OPENBLAS_NUM_THREADS:'12'}
+ const smallMachine={total:16*gib,free:8*gib}
+ const busyMachine={total:32*gib,free:3*gib}
+ for(const memory of [smallMachine,busyMachine]) {
+  const child=mineruProcessEnv(env,'win32',memory)
+  assert.equal(child.OPENBLAS_NUM_THREADS,'1')
+  assert.equal(child.OPENBLAS_DEFAULT_NUM_THREADS,'1')
+  assert.equal(child.MINERU_PROCESSING_WINDOW_SIZE,'3')
+  assert.equal(child.MINERU_PDF_RENDER_THREADS,'1')
+  assert.equal(child.DOCVORTEX_PDF_RENDER_THREADS,'1')
+ }
+ assert.equal(mineruProcessEnv({MINERU_PROCESSING_WINDOW_SIZE:'2'},'win32',busyMachine).MINERU_PROCESSING_WINDOW_SIZE,'2')
+ assert.equal(mineruProcessEnv(env,'win32',{total:32*gib,free:12*gib}).MINERU_PROCESSING_WINDOW_SIZE,'64')
+ assert.equal(mineruProcessEnv(env,'linux',busyMachine).OPENBLAS_NUM_THREADS,'12')
+ assert.equal(env.OPENBLAS_NUM_THREADS,'12')
+})
+
+test('MinerU reports memory exhaustion and unexpected worker exits without a Python traceback',async()=>{
+ const cases=[
+  ['OpenBLAS error: Memory allocation still failed after 10 retries\nRuntimeError: PDF render worker exited: 1','parser-memory'],
+  ['numpy._core._exceptions._ArrayMemoryError: Unable to allocate 5.18 MiB','parser-memory'],
+  ['DmlFusedConv\0 failed with HRESULT 8007000E\0\nUnicodeDecodeError: invalid continuation byte','parser-accelerator'],
+  ['RuntimeError: PDF render worker exited: 1','parser-render-worker'],
+ ]
+ for(const [stderr,code] of cases) {
+  const launch=()=>{
+   const child=new EventEmitter()
+   child.stdout=new EventEmitter()
+   child.stderr=new EventEmitter()
+   setImmediate(()=>{child.stderr.emit('data',stderr);child.emit('close',1)})
+   return child
+  }
+  const service=new MineruService({store:{},launch})
+  service.python=async()=>'/isolated/python'
+  await assert.rejects(service.run(['--status']),error=>error.code===code&&!error.message.includes('RuntimeError'))
+ }
+})
+
+test('runtime memory failures retry serially, then accelerator failure switches only this attempt to CPU',async()=>{
+ const {dir,service,docs}=await serviceFixture()
+ const calls=[],profiles=[]
+ service.run=async(args,{env,timeoutMs})=>{
+  calls.push({args,env,timeoutMs})
+  if(calls.length===1)throw new ReaderError('parser-memory','Allocation failed')
+  if(calls.length===2)throw new ReaderError('parser-accelerator','Accelerator allocation failed')
+  await writeFile(args[args.indexOf('--output')+1],JSON.stringify({middle:{pages:[{page_idx:0,blocks:[]}]},tier:'standard'}))
+ }
+ try {
+  const result=await service.parse({id:docs[0].id,onProgress:progress=>{
+   if(progress.stage==='recovering')profiles.push(progress.profile)
+  }})
+  assert.equal(result.recovery,'cpu')
+  assert.equal(result.tier,'standard')
+  assert.deepEqual(profiles,['serial','cpu'])
+  assert.equal(calls[1].env.MINERU_PROCESSING_WINDOW_SIZE,'1')
+  assert.equal(calls[2].env.MINERU_MODEL_ONNX_DEVICE,'cpu')
+  assert.equal(calls[2].env.MINERU_LLAMA_CPP_BACKEND,'cpu')
+  assert.ok(calls[2].timeoutMs<=calls[0].timeoutMs)
+  assert.equal((await service.parse({id:docs[0].id})).cached,true)
+  assert.equal(calls.length,3)
+ } finally {service.dispose();await cleanup(dir)}
+})
+
+test('a repeatable render error isolates the affected page and does not cache an incomplete document',async()=>{
+ const {dir,store,service,docs}=await serviceFixture()
+ const id=docs[0].id, allPages=[1,2,3,4,5], ranges=[]
+ await store.saveContent(id,{kind:'pdf',pageCount:5,pages:allPages.map(n=>({n,blocks:[]}))})
+ let badPage=3
+ service.run=async args=>{
+  const range=args.includes('--page-range')?args[args.indexOf('--page-range')+1]:null
+  ranges.push(range)
+  const pages=range?range.split(',').map(Number):allPages
+  if(pages.includes(badPage))throw new ReaderError('parser-render-worker','Page render worker exited')
+  await writeFile(args[args.indexOf('--output')+1],JSON.stringify({
+   middle:{pages:pages.map(n=>({page_idx:n-1,blocks:[]}))},tier:'standard',
+  }))
+ }
+ try {
+  const result=await service.parse({id})
+  assert.equal(result.recovery,'pages')
+  assert.deepEqual(result.middle.pages.map(page=>page.page_idx+1),[1,2,4,5])
+  assert.deepEqual(ranges,[null,null,'1,2,3','4,5','1,2','3'])
+  badPage=null
+  const retry=await service.parse({id,pageNumbers:[3],force:true})
+  assert.deepEqual(retry.middle.pages.map(page=>page.page_idx+1),[3])
+  assert.equal(ranges.at(-1),'3')
+  assert.equal((await service.parse({id})).cached,false)
+  assert.equal(ranges.at(-1),null)
+ } finally {service.dispose();await cleanup(dir)}
+})
+
+test('a worker startup failure retries once without splitting every page',async()=>{
+ const {dir,service,docs}=await serviceFixture()
+ let calls=0
+ service.run=async args=>{
+  calls++
+  assert.equal(args.includes('--page-range'),false)
+  const error=new ReaderError('parser-render-worker','Worker could not open PDF')
+  error.openingPdf=true
+  throw error
+ }
+ try {
+  await assert.rejects(service.parse({id:docs[0].id}),error=>error.code==='parser-render-worker')
+  assert.equal(calls,2)
+ } finally {service.dispose();await cleanup(dir)}
 })

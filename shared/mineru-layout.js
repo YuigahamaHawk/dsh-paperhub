@@ -38,8 +38,10 @@ function semanticItems(page) {
 /** Map every immutable PDF run to one structural block, retaining its original ID/text. */
 export function mineruPageLayout(sourcePage, parsedPage) {
   const items=semanticItems(parsedPage)
-  if(!items.length&&(sourcePage.sourceBlocks??sourcePage.blocks??[]).some(b=>b.text?.trim()))throw new Error('MinerU returned no structure for a nonempty page')
   let source=sourcePage.sourceBlocks??sourcePage.visionSourceBlocks??sourcePage.blocks??[]
+  if(!items.length&&(source.some(b=>b.text?.trim())||sourcePage.blocks?.some(b=>b.kind==='pageFigure'))) {
+    throw new Error('MinerU returned no structure; the original page is kept')
+  }
   // Scanned PDFs have no native glyph anchors. Their first OCR result becomes the immutable source.
   const ocr=source.reduce((n,b)=>n+String(b.text??'').trim().length,0)<12
   if(ocr)source=items.map((item,index)=>({id:`p${sourcePage.n}ocr${index}`,kind:'paragraph',page:sourcePage.n,text:textOf(item.content),rect:item.rect,sourceRect:item.rect,fontSize:sourcePage.fontSize??10}))

@@ -42,7 +42,14 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
   if(local){
     onProgress({stage:'local-parser',done:0,total:allPages.length,engine:'mineru'})
     try{
-      const parsed=await api.stream('parser.parse',{id:doc.id,force},{onProgress:progress=>onProgress({...progress,stage:'local-parser',done:0,total:allPages.length,engine:'mineru'})},signal)
+      const pageNumbers = retryFailed && pending.length && pending.length < allPages.length ? pending : undefined
+      let recoveryProfile
+      const parsed = await api.stream('parser.parse', {id:doc.id, force:force || retryFailed, pageNumbers}, {
+        onProgress: progress => {
+          if (progress.stage === 'recovering') recoveryProfile = progress.profile
+          onProgress({...progress, stage:'local-parser', done:0, total:allPages.length, engine:'mineru', recoveryProfile})
+        },
+      }, signal)
       check()
       const selected = retryFailed ? { ...current, pages: allPages.filter(page => pending.includes(page.n)) } : current
       const layout=mineruLayout(selected,parsed.middle,{cached:parsed.cached,tier:parsed.tier}),failed=layout.pages.filter(page=>page.error).map(page=>({page:page.n,message:page.error}))
@@ -63,7 +70,7 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
       const failedPages = new Set(failed.map(page => page.page))
       const completed = applied.content.pages.filter(page => page.vision?.version === VISION_LAYOUT_VERSION && !failedPages.has(page.n))
       const complete = completed.length === allPages.length
-      await publish(()=>({...keepFailedPagesOriginal(applied.content,failed),aiRefined:true,visionLayoutStatus:complete?'complete':'partial',visionLayoutVersion:complete?VISION_LAYOUT_VERSION:undefined,visionLayoutAt:Date.now(),visionLayoutModel:layout.model,visionLayoutErrors:failed,visionLayoutPages:completed.length,visionLayoutRegions:completed.reduce((sum,page)=>sum+(page.vision?.regions??0),0),parser:{engine:'mineru',version:MINERU_LAYOUT_VERSION,parserVersion:layout.parserVersion,tier:parsed.tier,elapsedMs:parsed.elapsedMs,cached:parsed.cached,local:true}}))
+      await publish(()=>({...keepFailedPagesOriginal(applied.content,failed),aiRefined:true,visionLayoutStatus:complete?'complete':'partial',visionLayoutVersion:complete?VISION_LAYOUT_VERSION:undefined,visionLayoutAt:Date.now(),visionLayoutModel:layout.model,visionLayoutErrors:failed,visionLayoutPages:completed.length,visionLayoutRegions:completed.reduce((sum,page)=>sum+(page.vision?.regions??0),0),parser:{engine:'mineru',version:MINERU_LAYOUT_VERSION,parserVersion:layout.parserVersion,tier:parsed.tier,elapsedMs:parsed.elapsedMs,cached:parsed.cached,local:true,recovery:parsed.recovery}}))
       onProgress({stage:'local-parser',done:allPages.length,total:allPages.length,engine:'mineru'})
       return {content:current,complete,errors:failed,cachedPages:parsed.cached?layout.pages.length:0,regions:applied.regions,model:layout.model}
     }catch(error){

@@ -386,7 +386,7 @@ export function createRpcSurface({ store, ai, zotero, parser, version }) {
     async 'parser.parse'(params,emit,signal){
       await store.init()
       const src=plainObject(params)
-      const value=await parser.parse({id:String(src.id??''),force:src.force===true,signal,onProgress:value=>emit('progress',{type:'progress',value})})
+      const value=await parser.parse({id:String(src.id??''),force:src.force===true,pageNumbers:src.pageNumbers,signal,onProgress:value=>emit('progress',{type:'progress',value})})
       emit('done',{type:'done',value})
     },
 

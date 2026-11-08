@@ -1082,6 +1082,8 @@ export function ReaderShell({ doc, content, annotations, aux, loading, onExtract
     else actions.toast(t('inline.batchDone', 'Inline typesetting finished. Completed {done}, failed {failed}.', { done: result.processed - result.failed, failed: result.failed }), result.failed ? 'error' : 'success')
   }
 
+  const localParserLabel = t('parser.recovery.' + state.layoutProgress?.recoveryProfile, t('parser.running','Local structure parsing'))
+
   return h(
     ReaderContext.Provider,
     { value: readerValue },
@@ -1107,13 +1109,13 @@ export function ReaderShell({ doc, content, annotations, aux, loading, onExtract
           ? h(IconButton, {
               icon: state.layoutProgress ? h(Spinner, { size: 16 }) : h(IconSpark, { size: 17 }),
               label:
-                state.layoutProgress ? (state.layoutProgress.stage==='local-parser'?t('parser.running','Local document parsing'):t('reader.visualRunning', 'AI visual layout')) + ` ${state.layoutProgress.done}/${state.layoutProgress.total}` : t('reader.visualRun', 'Rebuild AI visual layout (bypass layout cache)'),
+                state.layoutProgress ? (state.layoutProgress.stage==='local-parser'?localParserLabel:t('reader.visualRunning', 'AI visual layout')) + ` ${state.layoutProgress.done}/${state.layoutProgress.total}` : t('reader.visualRun', 'Rebuild AI visual layout (bypass layout cache)'),
               active: !!state.layoutProgress,
               onClick: () => state.layoutProgress ? actions.cancelLayout?.() : actions.rerunVisionLayout?.(),
             })
           : null,
         doc?.format === 'pdf' && state.layoutProgress
-          ? h('span', { className: 'dr-ai-progress', role: 'status', title: state.layoutProgress.stage==='local-parser'?t('parser.running','Local document parsing'):t('reader.visualRunning', 'AI visual layout') }, state.layoutProgress.stage==='local-parser'?`${t('parser.running','Local structure parsing')} · ${state.layoutProgress.total} ${t('reader.visualPages','pages')}`:`${state.layoutProgress.stage === 'paragraphs' ? t('reader.visualParagraphs', 'Paragraphs') : t('reader.visualPages', 'Visual pages')} ${state.layoutProgress.done}/${state.layoutProgress.total}`)
+          ? h('span', { className: 'dr-ai-progress', role: 'status', title: state.layoutProgress.stage==='local-parser'?localParserLabel:t('reader.visualRunning', 'AI visual layout') }, state.layoutProgress.stage==='local-parser'?`${localParserLabel} · ${state.layoutProgress.total} ${t('reader.visualPages','pages')}`:`${state.layoutProgress.stage === 'paragraphs' ? t('reader.visualParagraphs', 'Paragraphs') : t('reader.visualPages', 'Visual pages')} ${state.layoutProgress.done}/${state.layoutProgress.total}`)
           : null,
         doc?.format === 'pdf'
           ? h(SegmentedControl, {

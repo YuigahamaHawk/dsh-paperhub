@@ -453,8 +453,9 @@ export function ReaderApp({ api, t, diag, ctx, workspace: sharedWorkspace }) {
         toast(result.complete ? result.content.parser?.engine==='mineru'?t('parser.complete','Local structure parsing complete'):t('reader.visualComplete', 'AI visual layout complete') : t('reader.visualPartial', 'Some pages failed. Completed pages are saved; retry to continue.'), result.complete ? 'success' : 'error')
         return result.content
       } catch (error) {
-        diag?.report?.('ai-vision-failed', { docId: doc.id, message: String(error?.message ?? error).slice(0, 240) })
-        if (!controller.signal.aborted) toast(String(error?.message ?? error), 'error')
+        const message = String(error?.message ?? error)
+        diag?.report?.('ai-vision-failed', { docId: doc.id, code: error?.code, message: message.slice(0, 240) })
+        if (!controller.signal.aborted) toast(t('parser.error.' + error?.code, message), 'error')
       } finally {
         visionRuns.delete(doc.id)
         layoutProgressByDoc.delete(doc.id)

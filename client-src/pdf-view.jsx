@@ -107,6 +107,12 @@ const pageCanvasCache = new Map()
 const pageRenderTasks = new WeakMap()
 const enqueueRender = createPdfRenderQueue()
 
+function pdfRegionVariant(block) {
+  if (block?.kind === 'pageFigure') return 'page'
+  if (block?.kind === 'figure' || block?.kind === 'formula') return block.kind
+  return null
+}
+
 /** Drop rendered region images after a document/layout replacement. */
 export function clearRegionCache() {
   regionCache.clear()
@@ -373,7 +379,7 @@ function PdfReflow({ content, reader, t }) {
   const sentinelRef = React.useRef(null)
   const registerBlockEl = reader.registerBlockEl
   const hasRegions = React.useMemo(
-    () => pages.some((page) => (Array.isArray(page.blocks) ? page.blocks : []).some((block) => block?.kind === 'figure' || block?.kind === 'formula')),
+    () => pages.some((page) => Array.isArray(page.blocks) && page.blocks.some((block) => pdfRegionVariant(block) !== null)),
     [pages],
   )
   const [regionPdf, setRegionPdf] = React.useState(null)
@@ -440,7 +446,7 @@ function PdfReflow({ content, reader, t }) {
           hasMore = true
           break outer
         }
-        entries.push({ type: 'block', key: block?.id ?? `pdf-block-${entries.length}`, block })
+        entries.push({ type: 'block', key: block?.id ?? `pdf-block-${entries.length}`, block, regionVariant: pdfRegionVariant(block) })
         budget--
       }
     }
@@ -527,30 +533,19 @@ function PdfReflow({ content, reader, t }) {
               ` ${entry.page}`,
             ),
           )
-        : entry.block?.kind === 'pageFigure'
+        : entry.regionVariant
           ? h(PdfRegion, {
               key: entry.key,
               pdf: regionPdf,
               docId,
               block: entry.block,
-              variant: 'page',
+              variant: entry.regionVariant,
+              number: entry.block.numberPlacedInImage ? undefined : entry.block.number,
               reader,
               t,
               failed: regionPdfError !== null,
             })
-          : entry.block?.kind === 'figure' || entry.block?.kind === 'formula'
-            ? h(PdfRegion, {
-                key: entry.key,
-                pdf: regionPdf,
-                docId,
-                block: entry.block,
-                variant: entry.block.kind,
-                number: entry.block.numberPlacedInImage ? undefined : entry.block.number,
-                reader,
-                t,
-                failed: regionPdfError !== null,
-              })
-              : h(ParagraphBlock, { key: entry.key, block: entry.block }),
+          : h(ParagraphBlock, { key: entry.key, block: entry.block }),
     ),
     view.hasMore
       ? h('div', { key: 'pdf-load-more', className: 'dr-pdf-loadmore', ref: sentinelRef }, h(Spinner, { size: 14 }), t('reader.loadingMore', 'Loading more text…'))
