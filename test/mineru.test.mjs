@@ -63,6 +63,22 @@ test('chart bodies and chart captions form a figure without consuming the separa
  const parsed={blocks:[{type:'chart',index:0,bbox:[.09,.09,.82,.46],content:[{type:'chart_body',bbox:[.09,.09,.82,.41],content:'chart'},{type:'chart_caption',index:1,bbox:[.09,.42,.82,.46],content:page.sourceBlocks[1].text}]}]}
  const answer=mineruPageLayout(page,parsed);assert.equal(answer.regions[0].kind,'figure');assert.deepEqual(answer.regions[0].candidateIds,['plot']);assert.equal(answer.regions[0].captionId,'caption');assert.ok(answer.textBlocks.some(group=>group.kind==='caption'))
 })
+test('MinerU maps disjoint labels independently even when it puts them under the same visual parent',()=>{
+ const page={n:1,sourceBlocks:[
+  source('first','Figure 6. Measurements from two panels.',.12,.30,.72,.014),
+  source('panel','(a) Frequency response',.18,.46,.19,.014),
+  source('second','Figure 7. Calibration measurements.',.12,.53,.70,.014),
+ ]}
+ const parsed={blocks:[{type:'chart',index:1,bbox:[.10,.34,.87,.50],content:[
+  {type:'chart_body',bbox:[.10,.34,.87,.45]},
+  {type:'chart_caption',bbox:[.11,.30,.86,.315],content:page.sourceBlocks[0].text},
+  {type:'chart_caption',bbox:[.17,.46,.38,.475],content:page.sourceBlocks[1].text},
+  {type:'chart_caption',bbox:[.11,.53,.84,.545],content:page.sourceBlocks[2].text},
+ ]}]}
+ const mapped=mineruPageLayout(page,parsed)
+ assert.deepEqual(mapped.textBlocks.filter(b=>b.kind==='caption').map(b=>b.ids),[['first'],['panel'],['second']])
+ assert.deepEqual(mapped.regions[0].bbox,[.10,.34,.87,.45])
+})
 test('MinerU code wrappers preserve two algorithm boxes and leave adjacent prose selectable',()=>{
  const page={n:1,width:600,height:800,sourceBlocks:[
   source('algorithm-a','Algorithm 1: Training',.08,.08,.35,.02),
@@ -109,6 +125,23 @@ test('retrying a failed MinerU page preserves earlier page blocks even if settin
  assert.equal(result.content.visionLayoutPages,2)
 })
 
+test('retrying caption verification requests only the failed pages and keeps the parser cache enabled',async()=>{
+ const {page,parsed}=example()
+ const before={...page,vision:{version:VISION_LAYOUT_VERSION,engine:'mineru'},blocks:[{id:'existing',kind:'paragraph',text:'Already arranged.'}]}
+ const content={pages:[before,{...page,n:2}],visionLayoutStatus:'partial',visionLayoutModel:'MinerU test',
+  visionLayoutErrors:[{page:2,message:'Ambiguous caption ownership',original:true}]}
+ const api={rpc:async method=>method==='parser.status'?{engine:'mineru'}:{},
+  stream:async(method,params)=>{
+   assert.equal(method,'parser.parse')
+   assert.deepEqual(params,{id:'doc',force:false,pageNumbers:[2]})
+   return {middle:{pages:[{...parsed,page_idx:1}]},cached:true}
+  }}
+ const result=await runVisualLayout({api,doc:{id:'doc'},content,retryFailed:true})
+ assert.equal(result.complete,true)
+ assert.deepEqual(result.content.pages[0],before)
+ assert.equal(result.cachedPages,1)
+})
+
 test('retrying a whole-document MinerU failure replaces the previous visual layout only after parsing',async()=>{
  const {page,parsed}=example()
  const previous={...page,blocks:[{id:'existing',kind:'paragraph',text:'Previously arranged by the vision model.'}],vision:{version:VISION_LAYOUT_VERSION,engine:'vision',regions:0}}
@@ -145,6 +178,27 @@ test('parser results cache by source bytes and force bypasses that cache',async(
  const {dir,service,docs}=await serviceFixture();let calls=0
  service.run=async args=>{calls++;await writeFile(args[args.indexOf('--output')+1],JSON.stringify({middle:{pages:[{page_idx:0,blocks:[]}]},tier:'standard'}));return''}
  try{assert.equal((await service.parse({id:docs[0].id})).cached,false);assert.equal((await service.parse({id:docs[0].id})).cached,true);await service.parse({id:docs[0].id,force:true});assert.equal(calls,2)}finally{service.dispose();await cleanup(dir)}
+})
+test('the local parser can answer a scoped retry from a verified full-document cache',async()=>{
+ const {dir,store,service,docs}=await serviceFixture()
+ const id=docs[0].id
+ let calls=0
+ await store.saveContent(id,{pageCount:3,pages:[]})
+ service.run=async args=>{
+  calls++
+  await writeFile(args[args.indexOf('--output')+1],JSON.stringify({middle:{pages:[0,1,2].map(page_idx=>({page_idx,blocks:[]})),is_full_document:true},tier:'standard'}))
+  return ''
+ }
+ try{
+  const complete=await service.parse({id})
+  assert.equal(complete.cached,false)
+  const scoped=await service.parse({id,pageNumbers:[3,1]})
+  assert.equal(scoped.cached,true)
+  assert.equal(scoped.middle.is_full_document,false)
+  assert.deepEqual(scoped.middle.pages.map(p=>p.page_idx),[0,2])
+  assert.equal(calls,1)
+  assert.equal((await service.parse({id})).middle.pages.length,3)
+ }finally{service.dispose();await cleanup(dir)}
 })
 test('different binary PDFs never share a cache key through lossy UTF-8 coercion',async()=>{
  const {dir,service,docs}=await serviceFixture();let calls=0

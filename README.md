@@ -78,7 +78,7 @@
 安装 DeepSeek Harness 桌面版后，在左栏打开 **插件 → 添加插件**，填入以下安装地址。 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
 
 ```text
-github:YuigahamaHawk/dsh-paperhub#v1.0.4
+github:YuigahamaHawk/dsh-paperhub#v1.0.5
 ```
 
 重启 DSH，在 **插件** 页确认 dsh-paperhub 已启用，再从左侧打开 **Library（书库）**。点击 **导入** 加入第一篇 PDF 或 EPUB。打开文献后，PDF 可切换 **精排 / 原版**，点击顶部的翻译按钮开始对照阅读。

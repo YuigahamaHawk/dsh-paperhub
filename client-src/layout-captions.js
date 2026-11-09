@@ -1,9 +1,8 @@
 import { validBox } from '../shared/vision-contract.js'
+import { captionLabel as labelOf, isPanelLabel, startsWithMediaLabel as startsWithLabel } from '../shared/caption-label.js'
 import { checkFigureGeometry } from './figure-geometry.js'
 
 const isMedia = region => ['figure', 'table'].includes(region.kind) && region.renderAs !== 'text'
-const isBodyReference = /^(?:\([a-z]\)\s*)?(?:(?:also|below|above)\b|(?:shows?|reports?|gives?|lists?|summari[sz]es?|compares?|illustrates?|presents?|depicts?|describes?|contains?|provides?|plots?|demonstrates?|details?|is|are|was|were)\b|(?:显示|展示|给出|列出|说明|所示|中可以))/iu
-const captionStart = /^(fig(?:ure)?\.?|table\.?|图|表|附图|附表)\s*([A-Z]?\d+(?:[.\-]\d+)*[a-z]?|[IVXLCDM]+|[〇零一二三四五六七八九十百]+)(?![a-z0-9])/iu
 const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0))
 const intersection = (a, b) => overlap(a[0], a[2], b[0], b[2]) * overlap(a[1], a[3], b[1], b[3])
 const area = b => (b[2] - b[0]) * (b[3] - b[1])
@@ -18,18 +17,30 @@ function blockBox(block) {
   return rect && validBox([rect.x, rect.y, rect.x + rect.w, rect.y + rect.h])
 }
 
-function labelOf(value) {
-  const text = value.normalize('NFKC').trim()
-  const match = captionStart.exec(text)
-  if (!match) return null
-  const rest = text.slice(match[0].length).trimStart()
-  const separated = /^[.:：|｜–—]/u.test(rest)
-  if (!separated && isBodyReference.test(rest)) return null
-  return { kind: /^(?:fig|附?图)/iu.test(match[1]) ? 'figure' : 'table', number: match[2], separated }
-}
-
-const startsWithLabel = text => captionStart.test(text.normalize('NFKC').trim())
 const isNumberedReference = text => startsWithLabel(text) && !labelOf(text)
+const groupText = (group, byId) => group.ids.map(id => byId.get(id)?.text ?? '').join(' ').trim()
+const groupBox = (group, byId) => envelope(group.ids.map(id => byId.get(id)).filter(Boolean).map(blockBox).filter(Boolean))
+
+function splitCaptionGroups(groups, blocks) {
+  return groups.flatMap(group => {
+    if (group.kind !== 'caption') return [group]
+    const parts = []
+    let ids = [], previous
+    for (const id of group.ids) {
+      const block = blocks.get(id)
+      const box = block && blockBox(block)
+      if (ids.length && (labelOf(block?.text) || isPanelLabel(block?.text) ||
+          previous && box && box[1] - previous[3] > .023)) {
+        parts.push({ ...group, ids })
+        ids = []
+      }
+      ids.push(id)
+      previous = box
+    }
+    if (ids.length) parts.push({ ...group, ids })
+    return parts
+  })
+}
 
 function readCaptions(source, answer) {
   const blocks = new Map(source.map(block => [block.id, block]))
@@ -41,7 +52,7 @@ function readCaptions(source, answer) {
     const members = ids.filter(id => !assigned.has(id) && fixes.get(id) !== 'paragraph').map(id => blocks.get(id)).filter(Boolean)
     if (!members.length) return
     const text = members.map(block => String(block.text ?? '').trim()).join(' ').trim()
-    if (!text) return
+    if (!text || group?.captionKind !== 'table' && isPanelLabel(text)) return
     const label = labelOf(text)
     // A declared caption can be unnumbered. Short in-plot labels, panel letters
     // and body references cannot establish an unnumbered caption.
@@ -55,19 +66,7 @@ function readCaptions(source, answer) {
       bbox: envelope(members.map(blockBox).filter(Boolean)),
     })
   }
-  for (const group of answer.textBlocks ?? []) {
-    if (group.kind !== 'caption') continue
-    // An engine may emit two independently labelled captions as one text group.
-    let ids = []
-    for (const id of group.ids) {
-      if (ids.length && labelOf(String(blocks.get(id)?.text ?? ''))) {
-        add(ids, group, true)
-        ids = []
-      }
-      ids.push(id)
-    }
-    add(ids, group, true)
-  }
+  for (const group of answer.textBlocks ?? []) if (group.kind === 'caption') add(group.ids, group, true)
   for (const block of source) {
     const label = labelOf(String(block.text ?? ''))
     const explicit = fixes.get(block.id) === 'caption' || block.kind === 'caption' && (label?.separated || claims.has(block.id))
@@ -83,9 +82,11 @@ function readCaptions(source, answer) {
     for (; index < groups.length && groups[index].kind === 'caption'; index++) {
       const group = groups[index], members = group.ids.map(id => blocks.get(id)).filter(Boolean)
       const text = members.map(block => String(block.text ?? '')).join(' ').trim()
-      if (!text || startsWithLabel(text) || group.ids.some(id => assigned.has(id) || claims.has(id))) break
+      if (!text || startsWithLabel(text) || isPanelLabel(text) || group.ids.some(id => assigned.has(id) || claims.has(id))) break
       const box = envelope(members.map(blockBox).filter(Boolean))
-      if (!box || Math.abs(box[0] - caption.bbox[0]) > .025 || box[1] < caption.bbox[3] - .004 ||
+      const aligned = box && (Math.abs(box[0] - caption.bbox[0]) <= .025 ||
+        Math.abs(box[0] + box[2] - caption.bbox[0] - caption.bbox[2]) <= .05)
+      if (!aligned || box[1] < caption.bbox[3] - .004 ||
           box[1] - caption.bbox[3] > .016 || (text.match(/\p{L}/gu)?.length ?? 0) < 8) break
       caption.ids.push(...group.ids)
       caption.bbox = envelope([caption.bbox, box])
@@ -119,10 +120,16 @@ function nearCaption(caption, region, captions, allowWithoutBox) {
 function matchCaption(region, captions) {
   const claimed = captions.find(caption => caption.ids.includes(region.captionId))
   const nearby = captions.filter(caption => caption.label && nearCaption(caption, region, captions, false))
-  const exact = nearby.filter(caption => region.number && caption.label.number.toUpperCase() === String(region.number).toUpperCase())
+  const expectedSide = nearby.filter(({ bbox }) => region.kind === 'figure'
+    ? bbox[1] >= region.bbox[3] - .012 : bbox[3] <= region.bbox[1] + .012)
+  // When a caption sits between two objects, test their normal caption sides
+  // before trusting a recognizer's parent or number. Reversed originals are
+  // still supported when no credible caption exists on the normal side.
+  const choices = expectedSide.length ? expectedSide : nearby
+  const exact = choices.filter(caption => region.number && caption.label.number.toUpperCase() === String(region.number).toUpperCase())
   if (exact.length === 1) return exact[0]
-  if (claimed && nearCaption(claimed, region, captions, true)) return claimed
-  if (nearby.length === 1) return nearby[0]
+  if (claimed && (!expectedSide.length || expectedSide.includes(claimed)) && nearCaption(claimed, region, captions, true)) return claimed
+  if (choices.length === 1) return choices[0]
   return null
 }
 
@@ -156,6 +163,25 @@ function neighboringPanels(a, b) {
     verticalGap >= -.012 && verticalGap <= .045 && overlap(a[0], a[2], b[0], b[2]) >= .7 * width
 }
 
+function ownedPlotLabels(answer, panels, caption, labels, byId) {
+  const boxes = panels.map(panel => panel.bbox)
+  const claimedBy = new Map(answer.regions.filter(region => region.captionId).map(region => [region.captionId, region]))
+  return labels.filter(group => {
+    const box = groupBox(group, byId), text = groupText(group, byId)
+    if (!box || !text || startsWithLabel(text) ||
+        caption.bbox && intersection(box, caption.bbox) > .15 * area(box)) return false
+    const panel = isPanelLabel(text)
+    const claimant = group.ids.map(id => claimedBy.get(id)).find(Boolean)
+    const misplacedLegend = claimant && !isMedia(claimant) && /[+▲▼◆●■↑↓]/u.test(text) &&
+      overlap(box[0], box[2], claimant.bbox[0], claimant.bbox[2]) === 0
+    return boxes.some(bounds => {
+      if (overlap(bounds[0], bounds[2], box[0], box[2]) < .65 * (box[2] - box[0])) return false
+      if (panel) return box[1] >= bounds[3] - .012 && box[3] - bounds[3] <= .032
+      return misplacedLegend && box[3] <= bounds[1] + .006 && bounds[1] - box[3] <= .022
+    })
+  })
+}
+
 function prepareFigurePanels(answer, captions, source) {
   const figures = answer.regions.filter(isFigure)
   const owners = new Map(figures.map(region => [region, matchCaption(region, captions)]))
@@ -174,18 +200,34 @@ function prepareFigurePanels(answer, captions, source) {
       proposals.get(peer).push(caption)
     }
   }
-  const replacements = new Map()
+  const replacements = new Map(), reassigned = new Set()
+  const byId = new Map(source.map(block => [block.id, block]))
+  const captionIds = new Set(captions.filter(caption => ['figure', 'table'].includes(caption.kind)).flatMap(caption => caption.ids))
+  const labels = (answer.textBlocks ?? []).filter(group => group.kind === 'caption' && group.ids.every(id => !captionIds.has(id)))
   for (const caption of new Set([...owners.values()].filter(Boolean))) {
     const seeds = figures.filter(region => owners.get(region) === caption)
     const extra = figures.filter(region => proposals.get(region)?.length === 1 && proposals.get(region)[0] === caption)
-    if (!extra.length) continue
     const panels = [...seeds, ...extra]
     const region = mergePanels(panels, caption, captions, answer, source)
     if (!region) continue
-    replacements.set(seeds[0], { ...region, captionId: caption.ids[0], afterBlockId: null })
+    const attached = ownedPlotLabels(answer, panels, caption, labels.filter(group => !reassigned.has(group)), byId)
+    if (panels.length === 1 && !attached.length) continue
+    for (const group of attached) reassigned.add(group)
+    replacements.set(panels[0], {
+      ...region, captionId: caption.ids[0], afterBlockId: null,
+      bbox: envelope([region.bbox, ...attached.map(group => groupBox(group, byId))]),
+      candidateIds: [...new Set([...(region.candidateIds ?? []), ...attached.flatMap(group => group.ids)])],
+    })
     for (const panel of panels.slice(1)) replacements.set(panel, null)
   }
-  return { ...answer, regions: answer.regions.map(region => replacements.has(region) ? replacements.get(region) : region).filter(Boolean) }
+  const adopted = new Set([...reassigned].flatMap(group => group.ids))
+  return {
+    ...answer,
+    textBlocks: (answer.textBlocks ?? []).filter(group => !reassigned.has(group)),
+    captionFixes: (answer.captionFixes ?? []).filter(fix => !adopted.has(fix.id)),
+    regions: answer.regions.map(region => replacements.has(region) ? replacements.get(region) : region).filter(Boolean)
+      .map(region => adopted.has(region.captionId) ? { ...region, captionId: null, afterBlockId: null } : region),
+  }
 }
 
 /** Apply the same source-backed figure/table contract after either recognizer. */
@@ -193,18 +235,19 @@ export function constrainMediaCaptions(page, answer, ink) {
   if (answer.error) return answer
   const source = answer.sourceBlocks ?? page.sourceBlocks ?? page.visionSourceBlocks ?? page.blocks ?? []
   const referenceIds = new Set(source.filter(block => isNumberedReference(String(block.text ?? ''))).map(block => block.id))
-  if (referenceIds.size) answer = {
+  const byId = new Map(source.map(block => [block.id, block]))
+  answer = {
     ...answer,
-    textBlocks: (answer.textBlocks ?? []).map(group => group.kind === 'caption' && referenceIds.has(group.ids[0])
+    textBlocks: splitCaptionGroups(answer.textBlocks ?? [], byId).map(group => group.kind === 'caption' && referenceIds.has(group.ids[0])
       ? { ...group, kind: 'paragraph', captionKind: undefined } : group),
     captionFixes: (answer.captionFixes ?? []).map(fix => referenceIds.has(fix.id) ? { ...fix, kind: 'paragraph' } : fix),
   }
   let captions = readCaptions(source, answer)
-  // Keep the engine's unresolved proposals available to the ink repair, which
-  // can identify plot labels and absorb uncaptioned fragments of a larger figure.
+  // Discard unsupported associations while keeping the visual proposals.
   const prepared = { ...answer, regions: answer.regions.map(region => {
-    const caption = isMedia(region) && matchCaption(region, captions)
-    return caption ? { ...region, captionId: caption.ids[0] } : region
+    if (!isMedia(region)) return region
+    const caption = matchCaption(region, captions)
+    return { ...region, captionId: caption?.ids[0] ?? null }
   }) }
   const checked = checkFigureGeometry(page, ink ? prepareFigurePanels(prepared, captions, source) : prepared, ink)
   captions = readCaptions(source, checked)

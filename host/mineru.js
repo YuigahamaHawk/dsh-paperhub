@@ -229,7 +229,18 @@ export class MineruService {
       if(!status.available)throw new ReaderError('parser-unavailable',status.message)
       const baseKey=`mineru-local-v2-${status.version}|${status.tier}|image-analysis-off|${hash.digest('hex')}`
       const key = pages ? baseKey + '|pages:' + pages.join(',') : baseKey
-      if(!force){const cached=await this.store.getCachedReflow(key);if(coversPages(cached,pages,doc.pageCount))return{...cached,cached:true}}
+      if(!force){
+        const cached=await this.store.getCachedReflow(key)
+        if(coversPages(cached,pages,doc.pageCount))return{...cached,cached:true}
+        if(pages){
+          const full=await this.store.getCachedReflow(baseKey)
+          if(coversPages(full,null,doc.pageCount)){
+            const wanted=new Set(pages)
+            const middle={...full.middle,is_full_document:false,pages:full.middle.pages.filter(page=>wanted.has(page.page_idx+1))}
+            if(coversPages({middle},pages,doc.pageCount))return{...full,middle,cached:true}
+          }
+        }
+      }
       onProgress({stage:'queued',local:true,tier:status.tier})
       task=this.queue.then(()=>{
         if(combined.aborted)throw new ReaderError('aborted','已停止本机解析')

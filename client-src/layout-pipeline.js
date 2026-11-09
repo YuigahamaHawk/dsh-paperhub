@@ -55,12 +55,16 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
   const local = retryFailed && priorEngine ? priorEngine === 'mineru' : parser?.engine==='mineru'||parser?.engine==='auto'&&parser?.available
   if(local){
     // A whole-document MinerU failure can leave every page of a previous layout readable.
-    const retryWhole = retryFailed && content.visionLayoutErrors?.some(error => error.page == null)
+    const previousErrors = content.visionLayoutErrors ?? []
+    const retryWhole = retryFailed && previousErrors.some(error => error.page == null)
+    // Caption checks run after a successful parse. Replay that evidence on
+    // retry instead of repeating OCR for the same PDF and tier.
+    const retryParser = retryFailed && !(previousErrors.length && previousErrors.every(error => error.original && error.page != null))
     onProgress({stage:'local-parser',done:0,total:allPages.length,engine:'mineru'})
     try{
       const pageNumbers = retryFailed && !retryWhole && pending.length && pending.length < allPages.length ? pending : undefined
       let recoveryProfile
-      const parsed = await api.stream('parser.parse', {id:doc.id, force:force || retryFailed, pageNumbers}, {
+      const parsed = await api.stream('parser.parse', {id:doc.id, force:force || retryParser, pageNumbers}, {
         onProgress: progress => {
           if (progress.stage === 'recovering') recoveryProfile = progress.profile
           onProgress({...progress, stage:'local-parser', done:0, total:allPages.length, engine:'mineru', recoveryProfile})

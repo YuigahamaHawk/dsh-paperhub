@@ -255,3 +255,32 @@ test('an algorithm caption is independent of the figure and table contract', () 
   assert.equal(result.error, undefined)
   assert.equal(result.regions[0].captionId, 'cap')
 })
+
+test('shared reconciliation separates stacked multipanel figures even when a model claims the preceding caption', () => {
+  const source = (id, text, bbox) => ({ id, text, kind: 'paragraph', sourceRect: fromBox(bbox) })
+  const page = { n: 1, blocks: [
+    source('a', '(a) First measurement', [.20, .215, .37, .230]),
+    source('b', '(b) Second measurement', [.61, .215, .80, .230]),
+    source('cap1', 'Figure 6. Measurements by group.', [.20, .252, .80, .265]),
+    source('c', '(a) First calibration', [.20, .455, .37, .470]),
+    source('d', '(b) Second calibration', [.61, .455, .80, .470]),
+    source('cap2', 'Figure 7. Calibrations by group.', [.20, .492, .80, .505]),
+  ] }
+  const region = (bbox, captionId, number) => ({ kind: 'figure', bbox, captionId, number })
+  const answer = constrainMediaCaptions(page, {
+    n: 1,
+    textBlocks: [{ kind: 'caption', ids: ['a', 'b', 'cap1', 'c', 'd', 'cap2'] }],
+    regions: [
+      region([.12, .09, .46, .21], 'a'), region([.53, .09, .89, .21], 'b'),
+      region([.12, .29, .46, .45], 'cap1', '6'), region([.53, .29, .89, .45], 'd'),
+    ],
+  }, { width: 10, height: 10, pixels: new Uint8Array(100) })
+  assert.equal(answer.error, undefined)
+  assert.deepEqual(answer.regions.map(r => [r.captionId, r.number, r.candidateIds]), [['cap1', '6', ['a', 'b']], ['cap2', '7', ['c', 'd']]])
+  const [first, firstCaption, second, secondCaption] = applyVisionLayout({ pages: [page] }, { pages: [answer] }).content.pages[0].blocks
+  assert.equal(firstCaption.id, first.captionId)
+  assert.equal(secondCaption.id, second.captionId)
+  assert.equal(firstCaption.text, 'Figure 6. Measurements by group.')
+  assert.equal(secondCaption.text, 'Figure 7. Calibrations by group.')
+  assert.ok(first.cropRect.y + first.cropRect.h < second.cropRect.y)
+})

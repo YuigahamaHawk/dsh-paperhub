@@ -1,5 +1,7 @@
 // Geometry, reading order and source ownership from MinerU's public middle JSON.
 // No document-specific labels, page numbers, crops or equations are hard coded.
+import { captionLabel, isPanelLabel } from './caption-label.js'
+
 export const MINERU_LAYOUT_VERSION = 3
 const imageTypes = new Set(['image','chart','table','equation','algorithm','code'])
 const captionTypes = new Set(['image_caption','chart_caption','table_caption','equation_caption','algorithm_caption','code_caption','caption'])
@@ -8,11 +10,32 @@ const rectOf = block => block.sourceRect??block.rect
 const rect = box => Array.isArray(box)&&box.length===4&&box.every(Number.isFinite)&&box[0]>=0&&box[1]>=0&&box[2]<=1&&box[3]<=1&&box[2]>box[0]&&box[3]>box[1]?{x:box[0],y:box[1],w:box[2]-box[0],h:box[3]-box[1]}:null
 const overlap = (a,b) => a&&b?Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x))*Math.max(0,Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y))/Math.max(1e-12,a.w*a.h):0
 const near = (a,b) => a&&b&&a.x+a.w/2>=b.x-.004&&a.x+a.w/2<=b.x+b.w+.004&&a.y+a.h/2>=b.y-.004&&a.y+a.h/2<=b.y+b.h+.004
-const panelLabel = value => /^\([a-z]\)$/i.test(value.trim())
 function unionBoxes(boxes) {
   const valid=boxes.filter(box=>rect(box))
   if(!valid.length)return null
   return [Math.min(...valid.map(b=>b[0])),Math.min(...valid.map(b=>b[1])),Math.max(...valid.map(b=>b[2])),Math.max(...valid.map(b=>b[3]))]
+}
+
+function captionItems(children, kind, parent) {
+  const captions = children.filter(item => captionTypes.has(item.type) && rect(item.bbox))
+    .sort((a, b) => a.bbox[1] - b.bbox[1] || a.bbox[0] - b.bbox[0])
+  const groups = []
+  for (const part of captions) {
+    const text = textOf(part.content), previous = groups.at(-1)
+    const [left, top, right] = part.bbox
+    const separate = captionLabel(text) || kind === 'figure' && isPanelLabel(text)
+    // A recognizer can attach several disjoint captions (or plot labels) to
+    // one region. Keep their source envelopes independent before mapping runs.
+    if (previous && !previous.panel && !separate && top - previous.bbox[3] >= -.006 &&
+        top - previous.bbox[3] <= .018 && (Math.abs(left - previous.bbox[0]) <= .024 ||
+        Math.abs(left + right - previous.bbox[0] - previous.bbox[2]) <= .05)) {
+      previous.bbox = unionBoxes([previous.bbox, part.bbox])
+      previous.content += ' ' + text
+    } else {
+      groups.push({ ...part, kind: 'caption', captionKind: kind, parent, content: text, panel: kind === 'figure' && isPanelLabel(text) })
+    }
+  }
+  return groups
 }
 
 function semanticItems(page) {
@@ -21,17 +44,10 @@ function semanticItems(page) {
     const children=Array.isArray(block.content)?block.content:[]
     const algorithm=block.type==='code'&&(block.sub_type==='algorithm'||children.some(item=>item.type==='algorithm_body'))
     const kind=algorithm?'algorithm':imageTypes.has(block.type)?block.type:block.type==='paragraph_title'||block.type==='title'?'heading':/header|footer|page_number/.test(block.type)?'artifact':'paragraph'
-    const captionParts=children.filter(item=>captionTypes.has(item.type))
-    const markers=['image','chart'].includes(kind)?captionParts.filter(item=>panelLabel(textOf(item.content))):[]
-    const captions=captionParts.filter(item=>!markers.includes(item))
-    if(captions.length){
-      const bbox=unionBoxes(captions.map(c=>c.bbox))
-      const captionKind=['image','chart'].includes(kind)?'figure':kind
-      if(bbox)result.push({...captions[0],bbox,content:captions.map(c=>textOf(c.content)).join(' '),kind:'caption',captionKind,parent:block.index})
-    }
+    const captionKind=['image','chart'].includes(kind)?'figure':kind
+    result.push(...captionItems(children,captionKind,block))
     const body=children.find(item=>item.type===kind+'_body'||item.type===block.type+'_body')
-    const bbox=unionBoxes([body?.bbox??block.bbox,...markers.map(item=>item.bbox)])
-    result.push({...block,bbox,kind})
+    result.push({...block,bbox:body?.bbox??block.bbox,kind,owner:block})
   }
   return result.filter(item=>rect(item.bbox)).map(item=>({...item,rect:rect(item.bbox),ids:[]}))
 }
@@ -55,16 +71,17 @@ export function mineruPageLayout(sourcePage, parsedPage) {
   }
   // A very different coordinate system or an incomplete parse must not create invented crops.
   if(totalChars>100&&missingChars/totalChars>.10)throw new Error(`MinerU geometry could not anchor ${missingChars}/${totalChars} source characters; the original page is kept`)
-  const regions=[],textBlocks=[],byId=new Map(source.map(b=>[b.id,b]));let previous=null
+  const regions=[],textBlocks=[];let previous=null
   for(const item of items) {
     if(!item.ids.length&&!imageTypes.has(item.kind))continue
     if(imageTypes.has(item.kind)) {
       const kind=item.kind==='equation'?'formula':['table','algorithm','code'].includes(item.kind)?item.kind:'figure'
-      const captions=items.filter(v=>v.kind==='caption'&&v.parent===item.index),captionIds=captions.flatMap(v=>v.ids)
-      const captionText=captions.map(v=>textOf(v.content)).join(' ')
+      const captions=items.filter(v=>v.kind==='caption'&&v.parent===item.owner&&!v.panel&&v.ids.length)
+      const caption=captions.find(v=>captionLabel(v.content)?.kind===kind)??captions[0]
+      const captionId=caption?.ids[0]??null,captionText=textOf(caption?.content)
       const number=kind==='formula'?/\\tag\s*\{([^}]+)\}/.exec(textOf(item.content))?.[1]:kind==='algorithm'?/^\s*(?:algorithm|算法)\s*([\dIVXL]+)\b/i.exec(captionText||textOf(item.content))?.[1]:/^(?:fig(?:ure)?\.?|table|图|表)\s*([\dA-Z]+)\b/i.exec(captionText)?.[1]
       const printed=kind==='formula'&&number?(sourcePage.equationNumbers??[]).filter(v=>String(v.number)===number&&near(v.rect,item.rect)).sort((a,b)=>b.rect.x-a.rect.x)[0]?.rect:null
-      regions.push({id:`mineru-${item.index}`,kind,bbox:item.bbox,candidateIds:item.ids,captionId:captionIds[0]??null,number:number??null,numberBbox:printed?[printed.x,printed.y,printed.x+printed.w,printed.y+printed.h]:null,afterBlockId:captionIds[0]??previous,confidence:1,renderAs:'image',latex:kind==='formula'?textOf(item.content):undefined})
+      regions.push({id:`mineru-${item.index}`,kind,bbox:item.bbox,candidateIds:item.ids,captionId,number:number??null,numberBbox:printed?[printed.x,printed.y,printed.x+printed.w,printed.y+printed.h]:null,afterBlockId:captionId??previous,confidence:1,renderAs:'image',latex:kind==='formula'?textOf(item.content):undefined})
     } else {
       textBlocks.push({ids:item.ids,kind:item.kind,captionKind:item.captionKind,level:item.kind==='heading'?2:undefined,parserSpans:item.kind==='paragraph'?item.content:undefined})
       previous=item.ids[0]??previous
