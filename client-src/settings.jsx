@@ -10,7 +10,6 @@ import {
   IconFolder,
   IconInfo,
   IconDownload,
-  IconRefresh,
   IconTrash,
 } from './icons.jsx'
 import { AppearanceSettings } from './settings-appearance.jsx'
@@ -47,6 +46,7 @@ function DataSection() {
   const [cache, setCache] = React.useState(null)
   const [ping, setPing] = React.useState(null)
   const [busy, setBusy] = React.useState(false)
+  const [openingDirectory, setOpeningDirectory] = React.useState(false)
 
   const load = React.useCallback(async () => {
     try {
@@ -64,13 +64,29 @@ function DataSection() {
 
   const libraryBytes = React.useMemo(() => (state.docs ?? []).reduce((sum, doc) => sum + (Number(doc.size) || 0), 0), [state.docs])
 
+  const openDirectory = async () => {
+    setOpeningDirectory(true)
+    try {
+      await api.rpc('library.openDirectory')
+    } catch (error) {
+      actions.toast(t('settings.data.openFailed', 'Could not open the library folder: {message}', { message: error?.message ?? String(error) }), 'error')
+    } finally {
+      setOpeningDirectory(false)
+    }
+  }
+
   return h(
     'div',
     null,
     h('div', { className: 'dr-settings-h' }, t('settings.section.data', 'Data & storage')),
     h('p', { className: 'dr-settings-sub' }, '所有文档、批注与 AI 产出（翻译、摘要、问答历史）都保存在本地数据目录，重新打开文档不会重复消耗 token。'),
     h(Divider, { label: 'Library' }),
-    h(Row, { label: t('settings.data.docs', 'Documents: {count}', { count: state.docs.length }), description: ping?.dataDir ?? '' }, h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefresh, { size: 14 }), onClick: load }, t('common.retry', 'Refresh'))),
+    h(Row, { label: t('settings.data.docs', 'Documents: {count}', { count: state.docs.length }), description: ping?.dataDir ?? '' },
+      h(Button, {
+        size: 'sm', variant: 'ghost', icon: h(IconFolder, { size: 14 }), onClick: openDirectory,
+        disabled: !ping?.canOpenDataDirectory || openingDirectory,
+        title: t(ping?.canOpenDataDirectory ? 'settings.data.openDirectory' : 'settings.data.openUnavailable'),
+      }, t('common.open', 'Open'))),
     h(Row, { label: t('settings.data.usage', 'Library size: {size}', { size: formatBytes(libraryBytes) }) }, null),
     h(Divider, { label: 'AI cache' }),
     h(

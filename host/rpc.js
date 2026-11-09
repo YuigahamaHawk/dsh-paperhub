@@ -4,6 +4,8 @@
 // /api/dsh-reader/. The browser half has no direct filesystem, network or model access:
 // it calls these routes with the page's authenticated cookie.
 import { stat, readFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { join, resolve } from 'node:path'
 import { AiGateway } from './ai.js'
 import { ZoteroService } from './zotero.js'
 import { ReaderStore } from './store.js'
@@ -31,8 +33,26 @@ export const STREAM_PATH = '/api/dsh-reader/stream'
 
 const MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 
+function desktopDirectoryOpener() {
+  if (!process.versions.electron) return null
+  const windows = process.platform === 'win32'
+  const command = windows ? join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe')
+    : process.platform === 'darwin' ? '/usr/bin/open' : null
+  if (!command) return null
+  return directory => new Promise((done, reject) => {
+    const child = spawn(command, [directory], { stdio: 'ignore' })
+    child.once('error', reject)
+    // Explorer can hand the request to an existing window and exit with code 1.
+    if (windows) child.once('spawn', () => { child.unref(); done() })
+    else child.once('exit', code => {
+      if (code === 0) done()
+      else reject(new Error(`File manager exited with code ${code}`))
+    })
+  })
+}
+
 /** Build the reader's RPC + upload + file + stream handlers. */
-export function createRpcSurface({ store, ai, zotero, parser, version }) {
+export function createRpcSurface({ store, ai, zotero, parser, version, openDataDirectory = desktopDirectoryOpener() }) {
   store = store instanceof ReaderStore ? store : new ReaderStore()
   ai = ai ?? new AiGateway({ ctx: null, store })
   zotero = zotero ?? new ZoteroService({ store })
@@ -65,6 +85,7 @@ export function createRpcSurface({ store, ai, zotero, parser, version }) {
       return {
         version,
         dataDir: store.dataDir,
+        canOpenDataDirectory: Boolean(openDataDirectory),
         docs: store.listDocs().length,
         model: { available: dsh.available, provider: dsh.provider, model: dsh.model, providers: dsh.providers },
         settings: { targetLang: store.getSettings().ai.targetLang },
@@ -74,6 +95,13 @@ export function createRpcSurface({ store, ai, zotero, parser, version }) {
     async 'library.list'() {
       await store.init()
       return { docs: store.listDocs(), folders: store.listFolders() }
+    },
+
+    async 'library.openDirectory'() {
+      if (!openDataDirectory) throw new ReaderError('library-directory-unavailable', 'Opening the folder requires DSH Desktop.')
+      await store.init()
+      await openDataDirectory(resolve(store.dataDir))
+      return {}
     },
 
     async 'folders.list'() {

@@ -3,14 +3,14 @@
 <p align="center">An AI-powered literature library and reader for DeepSeek Harness</p>
 <p align="center">
   <a href="#library">Library</a> ·
-  <a href="#reader">Reader</a> ·
+  <a href="#built-in-reader">Built-in reader</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="#models-and-setup">Models and setup</a> ·
+  <a href="#model-selection">Model selection</a> ·
   <a href="#development">Development</a> ·
   <a href="./README.md">简体中文</a>
 </p>
 
-Organize papers and ebooks in one library. Read each paragraph alongside its translation, follow a figure or key finding back to the source, and take notes as you read.
+Keep papers and ebooks in one library. Read each paragraph alongside its translation, jump from figures and key findings to the original text, and annotate, ask questions, or export as you read.
 
 ## Library
 
@@ -18,76 +18,67 @@ Organize papers and ebooks in one library. Read each paragraph alongside its tra
 - **Import from a link.** Paste a public PDF link or an arXiv paper page into the import dialog.
 - **Sync with Zotero in one click.** Connect Zotero in Settings, then choose **Zotero sync** in the library to import PDF attachments.
 
-Keep several documents open in tabs. Each document remembers where you left off.
+![Batch import, link import, and Zotero sync](docs/media/import.gif)
 
-<!-- Record a folder or ZIP import, an arXiv import, and a Zotero sync.
-![Batch import, link import, and Zotero sync](docs/media/library-import.gif)
--->
-
-## Reader
+## Built-in reader
 
 ### AI-assisted reflow
 
 Turn PDFs with multiple columns, wide figures, or equations into a continuous reading view. Browse the nested table of contents and figure thumbnails, then jump back to the original PDF page whenever you need to check the layout. Inline formulas can also be refined one paragraph at a time.
 
-<!-- Show a complex paper in the original and reflowed views, then jump from a figure to the source page.
-![Reflowing a complex PDF and checking the original](docs/media/ai-layout.gif)
--->
+![Reflowing a complex PDF and checking the original](docs/media/layout.gif)
 
 ### Paragraph-by-paragraph translation
 
 Choose a target language in the toolbar and translate the entire document in one click. Each finished translation appears beneath its source paragraph as soon as it is ready. Automatic translation starts with the paragraphs on screen and continues through the rest of the document in the background.
 
-<!-- Show translation progress and the alternating source and translated paragraphs.
-![One-click translation and bilingual reading](docs/media/bilingual-reading.gif)
--->
+![One-click translation and bilingual reading](docs/media/translate.gif)
 
 ### Reading highlights and mind map
 
 Generate an overview of a paper's background, aims, methods, results, and limitations from the **Key points** tab. Browse the cards or open the **Mind map** to see the paper's structure. Select a card or a node to jump to its supporting passage.
 
-![Source-linked reading highlights and a mind map in the reader](docs/media/study-map.png)
-<sub>The screenshot uses a generated test document.</sub>
+![An interactive mind map linked to the original text](docs/media/study-map.png)
 
 ### AI reading assistant
 
-Select text, a figure, or a key point and bring it into the **AI assistant** with a single click. Ask about a curve, a methodological assumption, or a passage in context. Switch models at the top of the assistant. A model that accepts images receives the selected figure together with its caption.
+Select text, a figure or table, or a key point, then choose **Ask** to attach it to your question in the **AI assistant**. Switch models at the top of the assistant. Models that accept images can use the selected figure together with its caption.
 
-<!-- Ask a question about selected text and then a figure, showing the attached context in the assistant.
-![Asking the assistant about text or a figure](docs/media/reading-assistant.gif)
--->
+![Asking the AI assistant about text or a figure](docs/media/assistant.gif)
+
+<sub>The translation and Q&A clips use a sample document and scripted responses.</sub>
 
 ### Annotations and export
 
-Highlight text or attach a note, then revisit the original passage from the sidebar. With translations visible, **More → Export full text** writes a Markdown document with source and translated paragraphs in reading order. Reading notes and AI summaries can be exported separately.
+Highlight selected text or attach a note, then use the sidebar to return to the passage and edit the note. With translations visible, **More → Export full text** writes the original paragraphs and their available translations to Markdown in reading order. Reading notes and AI summaries can be exported separately.
 
 ### Personalize the reading view
 
-Adjust the theme, paper color, font, type size, spacing, and column width. Switch between the reflowed and original PDF views, or search the current document with `Ctrl+F` (`⌘F` on macOS).
+Adjust the theme, paper color, font, type size, line and paragraph spacing, and column width. Switch between the reflowed and original PDF views as you read.
 
-<!-- Switch paper colors and adjust the type size, line spacing, and width.
-![Customizing the reading view](docs/media/reader-appearance.gif)
--->
+![Customizing paper color, typography, and layout](docs/media/appearance.gif)
 
 ### Local cache
 
-Original files, annotations, reflowed layouts, translations, and reading highlights are stored locally. Reopening a document reuses saved results and saves repeat model calls. The mind map uses the same saved highlights.
+Reflowed layouts, translations, and reading highlights are saved locally. Reopening a document reuses available results and avoids repeat model calls for the same content. The mind map uses the saved highlights.
 
 ## Quick start
 
-Install DeepSeek Harness Desktop. Open **Plugins → Add plugin** and enter the following source. [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+Install DeepSeek Harness Desktop. Open **Plugins → Add plugin** from the sidebar and paste this address to install the latest stable release. [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
 
 ```text
-github:YuigahamaHawk/dsh-paperhub#v1.0.5
+https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paperhub.tgz
 ```
 
 Restart DSH and confirm that **dsh-paperhub** is enabled on the Plugins page. Open **Library** from the sidebar, then choose **Import** to add a PDF or EPUB. For a PDF, use **Reflow / Original** to switch views. Use the translation button in the toolbar to start bilingual reading.
 
-## Models and setup
+To pin a version, choose a release tag and install with `github:YuigahamaHawk/dsh-paperhub#<tag>`. [GitHub Releases](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
 
-### Use the current DSH model
+## Model selection
 
-Translation follows the model selected in DSH by default. Calls to a **DeepSeek Account** model are attributed to that account. Other providers apply their own quotas or billing. Choose a separate translation engine or a vision model under **AI Models** in reader settings, or switch the Q&A model in the AI assistant.
+### Choose your models
+
+Open **Settings → AI Models** to use the models available in DSH or add an OpenAI-compatible provider. By default, PaperHub follows the current DSH model. **DeepSeek Account** usage is attributed to that account. Other providers apply their own quotas or billing. Choose the translation engine and vision model independently in **AI Models**, and switch the Q&A model at the top of the AI assistant.
 
 ### Run MinerU locally
 
@@ -111,9 +102,7 @@ Open **AI Models → Translation engine** in reader settings to choose a machine
 
 ### Use WorkBuddy credits
 
-Sign in to WorkBuddy, then install and enable **dsh-connect-workbuddy** from **Add plugin** in DSH. Choose a WorkBuddy model in DSH and the reader can use it through the host. Check credit usage in your WorkBuddy account. The connection is provided by **dingminhua**'s independent plugin. [Source and installation](https://github.com/dingminhua/dsh-connect-workbuddy)
-
-Remote translation, vision layout, and Q&A send the text or images needed for the request to the selected provider.
+Sign in to WorkBuddy, then install and enable **dsh-connect-workbuddy** from **Add plugin** in DSH. You can then select a WorkBuddy model in PaperHub. Check credit usage in your WorkBuddy account. The integration is provided by an independent plugin maintained by **dingminhua**. [Source and installation](https://github.com/dingminhua/dsh-connect-workbuddy)
 
 ## Development
 

@@ -52,6 +52,22 @@ async function main() {
     assert.equal(settings.ai.targetLang, 'ja')
   })
 
+  await test('open library folder targets only the configured data directory', async () => {
+    const opened = []
+    const call = async (openDataDirectory, method, params) => {
+      const surface = createRpcSurface({ store, ai, zotero, version: 'test', openDataDirectory })
+      return jsonOf(await surface.routes[0].fetch(new Request('http://local/api/dsh-reader/rpc', {
+        method: 'POST', body: JSON.stringify({ method, params }),
+      })))
+    }
+    const open = async directory => { opened.push(directory) }
+    assert.equal((await call(open, 'ping')).value.canOpenDataDirectory, true)
+    assert.equal((await call(open, 'library.openDirectory', { path: join(dir, 'another-folder') })).ok, true)
+    assert.deepEqual(opened, [store.dataDir])
+    assert.equal((await call(null, 'ping')).value.canOpenDataDirectory, false)
+    assert.equal((await call(null, 'library.openDirectory')).error.code, 'library-directory-unavailable')
+  })
+
   await test('upload + commit + list + get', async () => {
     const bytes = Buffer.from('%PDF-1.4 fake pdf body for tests')
     const uploadResponse = await surface.routes[1].fetch(

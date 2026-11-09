@@ -28,27 +28,25 @@
 
 ![复杂 PDF 的精排与原版对照](docs/media/layout.gif)
 
-### 双语交替翻译
+### 逐段双语翻译
 
 在顶部选择目标语言，一键翻译全文。每段译文完成后就会显示在原文下方，方便边译边读。自动翻译优先处理当前视野内的段落，其余段落在后台继续。
 
-<!-- 待录动图。打开翻译，展示计数推进和中英段落交错。
-![一键翻译与逐段双语对照](docs/media/bilingual-reading.gif)
--->
+![一键翻译与逐段双语对照](docs/media/translate.gif)
 
 ### 阅读重点与思维导图
 
 在左栏 **重点** 一键梳理论文的研究背景、目标、核心方法、实验结果和局限性。生成后可以浏览分类卡片，或打开 **思维导图** 看全篇脉络。点卡片或导图节点即可跳到对应的原文依据。
 
-![阅读器中的分类重点和可点击的思维导图](docs/media/study-map.png)
+![可点击的思维导图](docs/media/study-map.png)
 
 ### AI 阅读助手
 
 选中正文、图表或重点卡片，点提问即可把引用带进右侧 **AI 助手**。在问答栏顶部切换模型，支持图片输入的模型可同时读取所选图表和图注。
 
-<!-- 待录动图。依次从正文选区和图表侧栏发起提问，停在右栏引用与回答。
-![带着正文或图表向 AI 提问](docs/media/reading-assistant.gif)
--->
+![带着图文向 AI 助手提问](docs/media/assistant.gif)
+
+<sub>翻译与问答动图使用自制文档，回复为演示示例。</sub>
 
 ### 批注与导出
 
@@ -66,13 +64,15 @@
 
 ## 快速开始
 
-安装 DeepSeek Harness 桌面版后，在左栏打开 **插件 → 添加插件**，填入以下安装地址。 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+安装 DeepSeek Harness 桌面版后，在左栏打开 **插件 → 添加插件**，粘贴以下地址安装最新正式版。 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
 
 ```text
-github:YuigahamaHawk/dsh-paperhub#v1.0.5
+https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paperhub.tgz
 ```
 
 重启 DSH，在 **插件** 页确认 dsh-paperhub 已启用，再从左侧打开 **Library（书库）**。点击 **导入** 加入第一篇 PDF 或 EPUB。打开文献后，PDF 可切换 **精排 / 原版**，点击顶部的翻译按钮开始对照阅读。
+
+需要固定版本时，从发行页面选定标签，再用 `github:YuigahamaHawk/dsh-paperhub#<标签>` 安装。[GitHub Releases](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
 
 ## 模型选择
 
