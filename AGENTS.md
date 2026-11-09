@@ -26,7 +26,7 @@ dsh-paperhub（智能文献库与阅读器）是 DeepSeek Harness 的本地文�
 | `client-src/reader-shell.jsx`、`client-src/toc.js`、`pdf-view.jsx`、`content-epub.jsx` | 阅读区、目录层级与锚点、侧栏、搜索定位、原版/精排、虚拟化与资源渲染。 |
 | `client-src/pdf-engine.js`、`pdf-geometry.js`、`region-crop.js` | PDF 文本与坐标、原始来源片段、图表/公式裁切。 |
 | `client-src/figure-geometry.js` | 按图注、栏位、正文和原页像素核对多栏图的分组及裁切。 |
-| `client-src/layout-pipeline.js`、`vision-*.js`、`layout-plan.js` | 排版流程、页面结构归属、渐进保存和段落组织。 |
+| `client-src/layout-pipeline.js`、`vision-*.js`、`layout-captions.js`、`layout-plan.js` | 排版流程、页面结构归属、图表配注、渐进保存和段落组织。 |
 | `client-src/paragraph.jsx`、`inline-math.jsx`、`translate.jsx` | 原文/译文呈现、行内数学、公式保护和翻译队列。 |
 | `client-src/annotations*.jsx`、`source-anchors.js`、`save-status.jsx` | 选区、高亮、文字批注、来源偏移、保存与断线恢复。 |
 | `client-src/media-browser.jsx`、`study-map.jsx`、`ai-panel.jsx` | 图表目录与预览、分类研究重点、问答。 |
@@ -57,7 +57,8 @@ dsh-paperhub（智能文献库与阅读器）是 DeepSeek Harness 的本地文�
 - 本机 MinerU 的资源限制只作用于解析子进程。内存受限时缩小页面批次，遇到加速器资源错误可临时用同档 CPU 解析。仅失败页面需要重试时，使用 SDK 的原始页码范围，未补齐的结构结果不作为整篇缓存。
 - 图表与展示公式优先从原 PDF 渲染，完整保留表头、规则线、分式、上下标、末项及编号。图注与正文不得被裁进图像；编号不能丢失或重复。识别出的 LaTeX 可作为结构信息，未经核验不能替换原式并宣称语义正确。
 - 图表和公式按页共用串行渲染。超时从开始处理该页计时，卡住时取消绘制并释放队列。重试渲染直接使用原 PDF 和现有排版坐标。
-- 共享图注的子图和图例使用同一个图块。逐图确认单栏或跨栏范围，遇到独立图注或正文时保留边界。子图字母、轴标题和图例依据原页位置归入同一图块，并保留各自来源 ID。算法框和代码清单保留原 PDF 的行号、缩进和公式，继续保留文字来源用于搜索。
+- 两条路线在发布精排页面前核对图表与原文注释的一对一归属。共享图注的子图和图例使用同一个图块，图注紧接在图下方，表注紧接在表上方。逐图确认单栏或跨栏范围，遇到独立图注或正文时保留边界。无法可靠配对的页保留原版或此前通过同一校验的结果。算法框和代码清单保留原 PDF 的行号、缩进和公式，继续保留文字来源用于搜索。
+- 识别页码和插入的图、表、算法后，按连续正文和原页版式恢复自然段。标题、其他正文和失败页限制可合并的范围。段落合并前的结构保存在变动页，供单页重试时重建段落。
 - 文本合并须维护 `sourceIds`、来源矩形和字符偏移。缓存键应覆盖文件/文字、模型或解析器版本、参数及契约，不能因块 ID 没变而复用旧裁图。
 
 MinerU 接线、研究重点卡片等是否已完成正式验收，查看交接记录。模块存在、结构 JSON 合法或单篇试验通过，都不能当作已发布的功能保证。

@@ -1,158 +1,244 @@
-// AI layout plan: window construction + validation of model-provided paragraph groups.
-//
-// The model only labels block ids. Cropping, ordering and text ownership stay deterministic; a
-// hallucinated id is ignored instead of deleting content. Windows overlap so a paragraph crossing
-// a page boundary is seen in full by at least one window.
+import { validateInlineMath } from '../shared/inline-math.js'
 
-export const LAYOUT_PLAN_VERSION = 5
+export const LAYOUT_PLAN_VERSION = 6
 
-const GROUPABLE = new Set(['paragraph'])
 const TEXTUAL = new Set(['paragraph', 'list', 'caption', 'heading'])
+const FLOATS = new Set(['figure', 'table', 'algorithm', 'code', 'listing', 'caption', 'footnote', 'artifact'])
+const TERMINAL = /[.!?。！？]["'”’）)\]]*$/u
+const OPEN_END = /[,，、:：;；\u00ad-]$|\b(?:and|or|of|for|to|by|in|is|with|using|that|the|a|an)$/iu
+const CJK_END = /[\p{Script=Han}，、；：]$/u
+const CJK_START = /^\p{Script=Han}/u
+const visualKind = block => block.structure ?? block.kind
+const mediaRect = block => block.visionRect ?? block.sourceRect ?? block.rect
+
+function isPageNumber(block) {
+  const rect = block.sourceRect ?? block.rect
+  return ['paragraph', 'footnote', 'artifact'].includes(block.kind) && rect && rect.w < .20 && (rect.y < .07 || rect.y + rect.h > .93) &&
+    /^(?:page\s+|第\s*)?(?:\d+|[ivxlcdm]+)(?:\s*(?:[/／]|of)\s*\d+|\s*页)?$/iu.test(String(block.text ?? '').trim())
+}
 
 export function buildLayoutWindows(content, options = {}) {
-  const pages = Array.isArray(content?.pages) ? content.pages : []
+  const pages = restoreParagraphFlow(content)?.pages ?? []
   const size = Math.max(2, Math.min(10, Number(options.size) || 6))
   const stride = Math.max(1, Math.min(size, Number(options.stride) || 4))
   const windows = []
   for (let start = 0; start < pages.length; start += stride) {
-    const slice = pages.slice(start, start + size)
-    if (slice.length === 0) break
-    const prepared = slice.map((page) => ({
-      n: Number(page?.n) || 0,
-      blocks: (Array.isArray(page?.blocks) ? page.blocks : [])
-        .filter((block) => block !== null && typeof block === 'object' && TEXTUAL.has(block.kind) && typeof block.id === 'string' && String(block.text ?? '').trim() !== '')
-        .map((block) => ({ id: block.id, kind: block.kind, text: String(block.text).slice(0, 6000) })),
+    const prepared = pages.slice(start, start + size).map(page => ({
+      n: Number(page.n),
+      blocks: (page.blocks ?? []).flatMap(block => {
+        if (typeof block?.id !== 'string' || !block.id || isPageNumber(block)) return []
+        const kind = visualKind(block)
+        if (TEXTUAL.has(kind) && String(block.text ?? '').trim()) return [{ id: block.id, kind, text: block.text.slice(0, 6000) }]
+        // Tell the model why adjacent prose is separated without sending image labels or table cells.
+        return FLOATS.has(kind) || ['formula', 'pageFigure'].includes(kind)
+          ? [{ id: block.id, kind, text: '[' + kind + ']' }] : []
+      }),
     }))
-    if (prepared.some((page) => page.blocks.length > 0)) windows.push({ id: `w${windows.length + 1}`, pages: prepared })
+    if (prepared.some(page => page.blocks.some(block => block.kind === 'paragraph'))) windows.push({ id: 'w' + (windows.length + 1), pages: prepared })
     if (start + size >= pages.length) break
   }
   return windows
 }
 
-function joinParagraphText(left, right) {
-  const a = String(left ?? '').trimEnd()
-  const b = String(right ?? '').trimStart()
-  if (a === '') return b
-  if (b === '') return a
-  if (/[-\u2010\u2011]$/.test(a)) return `${a.slice(0, -1)}${b}`
-  return `${a} ${b}`.replace(/\s+/g, ' ')
+function edgeLine(block, tail = false) {
+  const rects = block.sourceRects
+  if (!rects?.length) return null
+  const first = tail ? rects.at(-1) : rects[0]
+  const sameLine = rect => Math.abs(rect.y + rect.h / 2 - first.y - first.h / 2) <= .004
+  const line = rects.filter(sameLine)
+  const next = tail ? rects.find(rect => !sameLine(rect)) : rects.find(rect => rect.y > first.y + .004)
+  if (!next) return null
+  return { left: Math.min(...line.map(rect => rect.x)), right: Math.max(...line.map(rect => rect.x + rect.w)), next }
 }
 
-/**
- * Apply validated groups/captions from the AI plan.
- * - only paragraph blocks are groupable;
- * - only groups that cross a page boundary or skip intervening blocks are applied (same-page
- *   consecutive paragraphs are already deterministic, and a model mistake there is not worth it);
- * - captions are only re-labelled, never moved.
- */
-export function applyLayoutPlan(content, plan) {
-  const source = content !== null && typeof content === 'object' ? content : null
-  if (source === null || !Array.isArray(source.pages)) return { content, merged: 0, captions: 0, windows: 0 }
-  const pages = source.pages.map((page) => ({
-    ...page,
-    blocks: Array.isArray(page?.blocks) ? page.blocks.map((block) => ({ ...block })) : [],
-  }))
-  const indexOf = new Map()
-  for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
-    const blocks = pages[pageIndex].blocks
-    for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-      const block = blocks[blockIndex]
-      if (typeof block.id === 'string' && block.id !== '') indexOf.set(block.id, { pageIndex, blockIndex, block })
+function hasIndent(block) {
+  const line = edgeLine(block)
+  return line && line.left - line.next.x > .012 && line.left - line.next.x < .065
+}
+
+function hasFloatingGap(left, right, floats) {
+  const tail = left.sourceRects?.at(-1) ?? mediaRect(left)
+  const head = right.sourceRects?.[0] ?? mediaRect(right)
+  if (!tail || !head || head.y - tail.y - tail.h < .015) return false
+  return floats.some(rect => {
+    const sharesColumn = [tail, head].every(line => line.x + line.w > rect.x && line.x < rect.x + rect.w)
+    return sharesColumn && Math.min(rect.y + rect.h, head.y) - Math.max(rect.y, tail.y + tail.h) > .012
+  })
+}
+
+function continuesSentence(left, right) {
+  if (TERMINAL.test(left) || !right) return false
+  if (CJK_END.test(left) && CJK_START.test(right)) return true
+  if (/^[\p{Ll}]/u.test(right)) return true
+  return OPEN_END.test(left) && /^(?:[\p{L}\d("“‘$]|\\)/u.test(right)
+}
+
+function continuesIndentedFlow(left, right, nearby) {
+  const tail = edgeLine(left, true), head = edgeLine(right)
+  if (!tail || !head || Math.abs(head.left - head.next.x) > .006) return false
+  // In a document that indents new paragraphs, a flush-left continuation
+  // after a full line can carry on even when the break falls between sentences.
+  const columnWidth = tail.next.w
+  return columnWidth > .24 && tail.right - tail.left >= .90 * columnWidth &&
+    nearby.some(block => block !== left && block !== right && hasIndent(block))
+}
+
+function joinParagraphs(members) {
+  let text = ''
+  const formulas = []
+  let origin
+  for (const { block } of members) {
+    const original = String(block.text ?? ''), part = original.trim()
+    const record = block.parserInlineMath
+    if (text && /[\p{L}][\u00ad\u2010-]$/u.test(text) && /^\p{Ll}/u.test(part) &&
+        !/[\p{L}][-\u2010][\p{L}]+[-\u2010]$/u.test(text) && formulas.at(-1)?.end !== text.length) {
+      text = text.slice(0, -1)
+    } else if (text && !(CJK_END.test(text) && CJK_START.test(part))) {
+      text += ' '
     }
-  }
-  const parent = new Map()
-  const find = (id) => {
-    let current = id
-    while (parent.has(current) && parent.get(current) !== current) current = parent.get(current)
-    return current
-  }
-  const union = (left, right) => {
-    const a = find(left)
-    const b = find(right)
-    if (a !== b) parent.set(b, a)
-  }
-  const windows = Array.isArray(plan?.windows) ? plan.windows : []
-  const captions = new Set()
-  const demoteCaptions = new Set()
-  for (const window of windows) {
-    for (const id of Array.isArray(window?.demoteCaptions) ? window.demoteCaptions : []) {
-      if (typeof id === 'string' && indexOf.has(id)) demoteCaptions.add(id)
-    }
-  }
-  // Demote before interpreting groups: the model may put a body sentence that starts with
-  // "Figure 3 ..." into a paragraph group and also flag it in demoteCaptions.
-  for (const id of demoteCaptions) {
-    const found = indexOf.get(id)
-    if (found !== undefined) found.block.kind = 'paragraph'
-  }
-  for (const window of windows) {
-    const captionIds = Array.isArray(window?.captions) ? window.captions : []
-    for (const id of captionIds) {
-      if (typeof id === 'string' && indexOf.has(id)) captions.add(id)
-    }
-    const groups = Array.isArray(window?.groups) ? window.groups : []
-    for (const group of groups) {
-      if (!Array.isArray(group) || group.length < 2) continue
-      const ids = []
-      for (const id of group) {
-        if (typeof id !== 'string' || !indexOf.has(id)) continue
-        const found = indexOf.get(id)
-        if (found.block.kind !== 'paragraph') continue
-        if (!ids.includes(id)) ids.push(id)
+    if (record?.source === original && Array.isArray(record.segments)) {
+      let offset = text.length - (original.length - original.trimStart().length)
+      for (const segment of record.segments) {
+        const value = segment?.type === 'math' ? segment.source : segment?.text
+        if (typeof value !== 'string') break
+        const end = offset + value.length
+        if (segment.type === 'math') formulas.push({ start: offset, end, segment })
+        offset = end
       }
-      if (ids.length < 2) continue
-      const sorted = ids
-        .map((id) => ({ id, ...indexOf.get(id) }))
-        .sort((a, b) => a.pageIndex - b.pageIndex || a.blockIndex - b.blockIndex)
-      const crossesPage = sorted[0].pageIndex !== sorted[sorted.length - 1].pageIndex
-      const spansGap = sorted.some((entry, index) => index > 0 && entry.pageIndex === sorted[index - 1].pageIndex && entry.blockIndex > sorted[index - 1].blockIndex + 1)
-      const hasHeadingBetween = sorted.some((entry, index) => {
-        if (index === 0 || entry.pageIndex !== sorted[index - 1].pageIndex) return false
-        const blocks = pages[entry.pageIndex].blocks
-        for (let cursor = sorted[index - 1].blockIndex + 1; cursor < entry.blockIndex; cursor++) {
-          if (blocks[cursor]?.kind === 'heading') return true
-        }
-        return false
-      })
-      if (hasHeadingBetween) continue
-      const anchorOpen = !/[.!?。！？:：;；]["'”’)\]]?$/.test(String(sorted[0].block.text ?? '').trim())
-      if (!anchorOpen && !spansGap) continue
-      // Same-page groups are accepted only when the anchor is unfinished; a model error on two
-      // complete paragraphs is still rejected.
-      for (let index = 1; index < sorted.length; index++) union(sorted[0].id, sorted[index].id)
+      origin ??= record.origin
+    }
+    text += part
+  }
+  if (!formulas.length) return { text, parserInlineMath: undefined }
+  const segments = []
+  let offset = 0
+  for (const { start, end, segment } of formulas) {
+    if (start < offset || text.slice(start, end) !== segment.source) continue
+    if (start > offset) segments.push({ type: 'text', text: text.slice(offset, start) })
+    segments.push(segment)
+    offset = end
+  }
+  if (!offset) return { text, parserInlineMath: undefined }
+  if (offset < text.length) segments.push({ type: 'text', text: text.slice(offset) })
+  try {
+    const record = validateInlineMath({ segments }, text, { sourceAlignedParser: true })
+    return { text, parserInlineMath: { ...record, origin, enabled: true, request: null } }
+  } catch {
+    return { text, parserInlineMath: undefined }
+  }
+}
+
+// Undo only the paragraph presentation layer. Per-page retry always starts
+// from the recognized blocks, including fragments previously moved off-page.
+export function restoreParagraphFlow(content) {
+  if (!content?.pages?.some(page => Array.isArray(page.flowBaseBlocks))) return content
+  const pages = content.pages.map(page => {
+    if (!Array.isArray(page.flowBaseBlocks)) return page
+    const { flowBaseBlocks, ...base } = page
+    return { ...base, blocks: flowBaseBlocks }
+  })
+  return { ...content, pages }
+}
+
+export function applyLayoutPlan(content, plan, { inferContinuations = false, paragraphsOnly = false, failedPages = [] } = {}) {
+  const source = restoreParagraphFlow(content)
+  if (!Array.isArray(source?.pages)) return { content, merged: 0, captions: 0, windows: 0 }
+  const pages = source.pages.map(page => ({ ...page, blocks: (page.blocks ?? []).map(block => ({ ...block })) }))
+  const windows = Array.isArray(plan?.windows) ? plan.windows.filter(window => window && !window.error) : []
+  const byId = new Map(pages.flatMap(page => page.blocks.map(block => [block.id, block])))
+  const paired = new Set(pages.flatMap(page => page.blocks.map(block => block.captionId).filter(Boolean)))
+  let captionCount = 0
+  if (!paragraphsOnly) for (const window of windows) {
+    for (const id of window.demoteCaptions ?? []) {
+      const block = byId.get(id)
+      if (block?.kind === 'caption' && !paired.has(id)) block.kind = 'paragraph'
+    }
+    for (const id of window.captions ?? []) {
+      const block = byId.get(id)
+      if (block && ['paragraph', 'caption'].includes(block.kind) && !(window.demoteCaptions ?? []).includes(id)) {
+        block.kind = 'caption'
+        captionCount++
+      }
     }
   }
 
-  let captionCount = 0
-  for (const id of captions) {
-    const found = indexOf.get(id)
-    if (found === undefined || demoteCaptions.has(id)) continue
-    found.block.kind = 'caption'
-    captionCount++
+  const unavailable = new Set(failedPages.map(Number))
+  const entries = new Map(), edges = new Map(), removed = new Set(), changed = new Set()
+  let previous = null, interrupted = false, previousPage = null
+  for (const [pageIndex, page] of pages.entries()) {
+    if (previousPage !== null && Number(page.n) !== previousPage + 1) previous = null
+    previousPage = Number(page.n)
+    if (page.layoutFailed || unavailable.has(previousPage) || !page.blocks.length) {
+      previous = null
+      continue
+    }
+    const floats = page.blocks.filter(block => FLOATS.has(visualKind(block)) && block.visionGenerated).map(mediaRect).filter(Boolean)
+    for (const block of page.blocks) {
+      if (inferContinuations && isPageNumber(block)) {
+        removed.add(block.id)
+        changed.add(pageIndex)
+        interrupted = true
+        continue
+      }
+      if (FLOATS.has(visualKind(block))) {
+        interrupted = true
+        continue
+      }
+      if (block.kind !== 'paragraph' || !String(block.text ?? '').trim()) {
+        previous = null
+        continue
+      }
+      const entry = { block, pageIndex, order: entries.size }
+      entries.set(block.id, entry)
+      if (previous) edges.set(block.id, { left: previous, right: entry, interrupted:
+        interrupted || previous.pageIndex !== pageIndex || hasFloatingGap(previous.block, block, floats) })
+      previous = entry
+      interrupted = false
+    }
   }
 
-  const groups = new Map()
-  for (const [id, found] of indexOf) {
-    if (found.block.kind !== 'paragraph') continue
-    const root = find(id)
-    if (!groups.has(root)) groups.set(root, [])
-    groups.get(root).push({ id, ...found })
+  const accepted = new Map()
+  const accept = edge => accepted.set(edge.right.block.id, edge.left.block.id)
+  if (inferContinuations) for (const edge of edges.values()) {
+    if (!edge.interrupted) continue
+    const left = edge.left.block, right = edge.right.block
+    if (hasIndent(right)) continue
+    const nearby = [...pages[edge.left.pageIndex].blocks, ...pages[edge.right.pageIndex].blocks].filter(block => block.kind === 'paragraph')
+    if (continuesSentence(left.text.trimEnd(), right.text.trimStart()) || continuesIndentedFlow(left, right, nearby)) accept(edge)
+  }
+  for (const window of windows) for (const group of window.groups ?? []) {
+    if (!Array.isArray(group)) continue
+    const members = [...new Set(group)].map(id => entries.get(id)).filter(Boolean).sort((a, b) => a.order - b.order)
+    if (members.length < 2) continue
+    const joins = members.slice(1).map(member => edges.get(member.block.id))
+    if (joins.some((edge, index) => edge?.left !== members[index])) continue
+    if (joins.some(({ left, right, interrupted }) => hasIndent(right.block) ||
+        !interrupted && TERMINAL.test(left.block.text.trimEnd()))) continue
+    for (const edge of joins) accept(edge)
+  }
+
+  const groups = new Map(), roots = new Map()
+  for (const [id, entry] of entries) {
+    const root = roots.get(accepted.get(id)) ?? id
+    roots.set(id, root)
+    if (root === id) groups.set(root, [])
+    groups.get(root).push(entry)
   }
   let merged = 0
   for (const members of groups.values()) {
     if (members.length < 2) continue
-    members.sort((a, b) => a.pageIndex - b.pageIndex || a.blockIndex - b.blockIndex)
-    const anchor = members[0]
-    anchor.block.sourceIds = members.flatMap(member => member.block.sourceIds ?? [member.id])
-    anchor.block.continuedPages = [...new Set(members.map(member => Number(pages[member.pageIndex].n)))]
-    let text = anchor.block.text
-    for (let index = 1; index < members.length; index++) {
-      text = joinParagraphText(text, members[index].block.text)
-      members[index].block.text = ''
-    }
-    anchor.block.text = text
+    const anchor = members[0].block
+    const pageNumbers = [...new Set(members.flatMap(({ block, pageIndex }) => block.continuedPages ?? [Number(pages[pageIndex].n)]))]
+    const sourceIds = [...new Set(members.flatMap(({ block }) => [block.id, ...(block.sourceIds ?? [])]))]
+    Object.assign(anchor, joinParagraphs(members), { continuedPages: pageNumbers, sourceIds })
+    for (const { pageIndex } of members) changed.add(pageIndex)
+    for (const { block } of members.slice(1)) removed.add(block.id)
     merged++
   }
-  for (const page of pages) page.blocks = page.blocks.filter((block) => String(block.text ?? '').trim() !== '' || block.kind === 'figure' || block.kind === 'formula')
+  for (const [index, page] of pages.entries()) {
+    if (!changed.has(index)) continue
+    page.blocks = page.blocks.filter(block => !removed.has(block.id))
+    if (inferContinuations) page.flowBaseBlocks = source.pages[index].blocks
+  }
   return { content: { ...source, pages }, merged, captions: captionCount, windows: windows.length }
 }

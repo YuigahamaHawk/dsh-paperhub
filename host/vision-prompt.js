@@ -52,13 +52,16 @@ REGION RULES
 1. Figure
 - bbox covers ALL visual content of that figure: every panel, axis, tick label, legend, arrow, annotation, and label.
 - bbox MUST exclude: page header/footer/page number, the figure caption text, body prose, and blank margins.
+- renderAs is "image" for figures.
 - For multi-panel figures, include all panels in one bbox when they share one caption; if each panel has its own caption, emit one region per caption.
 - Decide the width separately for each figure. On a mixed-column page, inspect the right side and any continuation of the caption before declaring a figure single-column. Include shared legends and panel letters in the figure.
-- captionId points to the caption block when one exists, otherwise null. Never invent a caption.
+- Each figure has exactly one real caption, and each caption belongs to exactly one figure. Put all lines of that caption in one textBlocks group of kind "caption"; captionId is the group's first candidate ID. The reader places the figure immediately above its caption, regardless of their order on the PDF page.
+- Use null and report a warning when the caption cannot be identified. Never invent a caption, reuse another figure's caption, or split one caption across multiple subfigures.
 
 2. Table
 - bbox covers the complete grid including header row and all rules, but excludes the "Table N ..." caption block and body text.
-- If a table spans a page break, return one region for each page piece; do not merge across pages.
+- Each table has exactly one real caption and each caption belongs to exactly one table. Use the first ID of its complete caption group. The reader places the caption immediately above the table, regardless of their order on the PDF page.
+- If a page only has a continuation of a table and carries no matching caption, use null and report that the matching caption is on another page. Never borrow another table's caption or invent text.
 - renderAs is "image" for tables.
 
 3. Display formula
@@ -73,7 +76,7 @@ REGION RULES
 4. Algorithm / listing / code / box
 - bbox covers the whole algorithm/listing/box, including its title, rules, line numbers, comments, and internal annotations.
 - Exclude its "Algorithm N ..." caption if it is a separate text block; captionId points to that block.
-- renderAs "image" when line art, rules, colors, or alignment matter; "text" only when the content is plain monospaced prose and can be reflowed without loss.
+- renderAs "image" for algorithms and whenever alignment, line art, rules or colors carry meaning. Use "text" only for other code/listings that can reflow without loss.
 - number is the printed algorithm/listing number when present.
 
 5. Theorem / definition / proof / other
@@ -101,6 +104,7 @@ REGION RULES
 - Do not include a body paragraph in a visual region's candidateIds. In particular, preserve explanatory sentences below equations and prose around algorithms.
 - With two columns, read down the left column before the right column; a full-width figure or heading may interrupt both columns. afterBlockId must reflect that reading order.
 - Only when the page image clearly shows paragraph continuity that the candidate list split, return groups of candidate IDs that belong to ONE natural paragraph.
+- A figure, table, algorithm, caption or printed page number does not end the surrounding paragraph. If the body continues around the object on this page, keep all those body lines in one paragraph in reading order. At a page boundary, retain every fragment for the document-level pass to join; do not guess missing text.
 - Do not put headings, captions, figures, tables, formulas or algorithm blocks into paragraph groups.
 - If uncertain, return [].
 

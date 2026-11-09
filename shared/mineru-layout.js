@@ -26,7 +26,8 @@ function semanticItems(page) {
     const captions=captionParts.filter(item=>!markers.includes(item))
     if(captions.length){
       const bbox=unionBoxes(captions.map(c=>c.bbox))
-      if(bbox)result.push({...captions[0],bbox,content:captions.map(c=>textOf(c.content)).join(' '),kind:'caption',parent:block.index})
+      const captionKind=['image','chart'].includes(kind)?'figure':kind
+      if(bbox)result.push({...captions[0],bbox,content:captions.map(c=>textOf(c.content)).join(' '),kind:'caption',captionKind,parent:block.index})
     }
     const body=children.find(item=>item.type===kind+'_body'||item.type===block.type+'_body')
     const bbox=unionBoxes([body?.bbox??block.bbox,...markers.map(item=>item.bbox)])
@@ -65,7 +66,7 @@ export function mineruPageLayout(sourcePage, parsedPage) {
       const printed=kind==='formula'&&number?(sourcePage.equationNumbers??[]).filter(v=>String(v.number)===number&&near(v.rect,item.rect)).sort((a,b)=>b.rect.x-a.rect.x)[0]?.rect:null
       regions.push({id:`mineru-${item.index}`,kind,bbox:item.bbox,candidateIds:item.ids,captionId:captionIds[0]??null,number:number??null,numberBbox:printed?[printed.x,printed.y,printed.x+printed.w,printed.y+printed.h]:null,afterBlockId:captionIds[0]??previous,confidence:1,renderAs:'image',latex:kind==='formula'?textOf(item.content):undefined})
     } else {
-      textBlocks.push({ids:item.ids,kind:item.kind,level:item.kind==='heading'?2:undefined,parserSpans:item.kind==='paragraph'?item.content:undefined})
+      textBlocks.push({ids:item.ids,kind:item.kind,captionKind:item.captionKind,level:item.kind==='heading'?2:undefined,parserSpans:item.kind==='paragraph'?item.content:undefined})
       previous=item.ids[0]??previous
     }
   }

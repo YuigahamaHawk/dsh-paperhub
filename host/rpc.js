@@ -418,7 +418,7 @@ export function createRpcSurface({ store, ai, zotero, parser, version }) {
       emit('done', { type: 'done', value: result })
     },
 
-    /** One windowed AI pass that labels natural-paragraph groups and captions. */
+    /** One windowed AI pass that links fragments of natural paragraphs. */
     async 'ai.layoutPlan'(params, emit, signal) {
       await store.init()
       const src = plainObject(params)

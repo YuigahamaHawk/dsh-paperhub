@@ -78,7 +78,7 @@ Original files, annotations, reflowed layouts, translations, and reading highlig
 Install DeepSeek Harness Desktop. Open **Plugins → Add plugin** and enter the following source. [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
 
 ```text
-github:YuigahamaHawk/dsh-paperhub#v1.0.3
+github:YuigahamaHawk/dsh-paperhub#v1.0.4
 ```
 
 Restart DSH and confirm that **dsh-paperhub** is enabled on the Plugins page. Open **Library** from the sidebar, then choose **Import** to add a PDF or EPUB. For a PDF, use **Reflow / Original** to switch views. Use the translation button in the toolbar to start bilingual reading.

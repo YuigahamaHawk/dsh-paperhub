@@ -1,22 +1,36 @@
 import { applyVisionLayout, VISION_LAYOUT_VERSION } from './vision-layout.js'
 import { renderVisionPages, renderLayoutInkPages } from './vision-render.js'
-import { applyLayoutPlan, buildLayoutWindows, LAYOUT_PLAN_VERSION } from './layout-plan.js'
+import { applyLayoutPlan, buildLayoutWindows, restoreParagraphFlow, LAYOUT_PLAN_VERSION } from './layout-plan.js'
 import {mineruLayout,MINERU_LAYOUT_VERSION} from '../shared/mineru-layout.js'
-import { canCheckFigureGeometry, checkFigureGeometry } from './figure-geometry.js'
+import { constrainMediaCaptions } from './layout-captions.js'
 
 export const hasCurrentVisualLayout=content=>content?.visionLayoutStatus==='complete'&&content.visionLayoutVersion===VISION_LAYOUT_VERSION&&(content.parser?.engine!=='mineru'||content.parser.version===MINERU_LAYOUT_VERSION)
 export const hasFailedVisualLayout = content => content?.visionLayoutStatus === 'partial' && !!content.visionLayoutErrors?.length
 
 export function keepFailedPagesOriginal(content,errors){
-  const failed=new Map(errors.filter(error=>error.page).map(error=>[Number(error.page),error.message]))
-  return {...content,pages:content.pages.map(page=>failed.has(Number(page.n))&&page.vision?.version!==VISION_LAYOUT_VERSION?{...page,sourceBlocks:page.sourceBlocks??page.visionSourceBlocks??page.blocks,layoutFailed:true,layoutError:failed.get(Number(page.n)),blocks:[{id:`p${page.n}unparsed`,kind:'pageFigure',page:page.n,layoutFailed:true,text:(page.sourceBlocks??page.blocks??[]).map(b=>b.text??'').join(' '),rect:{x:0,y:0,w:1,h:1},pageWidth:page.width,pageHeight:page.height}]}:page)}
+  const failed=new Map(errors.filter(error=>error.page).map(error=>[Number(error.page),error]))
+  return {...content,pages:content.pages.map(page=>{
+    const error=failed.get(Number(page.n))
+    if(!error||page.vision?.version===VISION_LAYOUT_VERSION&&(!error.original||page.vision.mediaContract))return page
+    const sourceBlocks=page.sourceBlocks??page.visionSourceBlocks??page.blocks??[]
+    return {...page,sourceBlocks,flowBaseBlocks:undefined,vision:undefined,layoutFailed:true,layoutError:error.message,blocks:[{
+      id:`p${page.n}unparsed`,kind:'pageFigure',page:page.n,layoutFailed:true,text:sourceBlocks.map(block=>block.text??'').join(' '),
+      rect:{x:0,y:0,w:1,h:1},pageWidth:page.width,pageHeight:page.height,
+    }]}
+  })}
+}
+
+function finishParagraphs(content, plan, errors) {
+  const base = keepFailedPagesOriginal(restoreParagraphFlow(content), errors)
+  return applyLayoutPlan(base, plan, { inferContinuations: true, paragraphsOnly: true, failedPages: errors.map(error => error.page) }).content
 }
 
 // One owner and one serial writer for the document. Model calls may overlap;
 // state publication never does. Every publish transforms the latest content.
-export async function runVisualLayout({ api, doc, content, force = false, retryFailed = false, signal, onProgress = () => {}, onContent = () => {}, renderPages = renderVisionPages }) {
+export async function runVisualLayout({ api, doc, content, force = false, retryFailed = false, signal, onProgress = () => {}, renderPages = renderVisionPages, renderInkPages = renderLayoutInkPages, onContent = () => {} }) {
   let current = content
-  const allPages = content.pages ?? []
+  const allPages = restoreParagraphFlow(content).pages ?? []
+  const sources = new Map(allPages.map(page => [Number(page.n), page]))
   const failedNumbers = new Set((content.visionLayoutErrors ?? []).filter(error => error.page != null).map(error => Number(error.page)))
   const explicitPages = retryFailed && failedNumbers.size
   const pending = allPages.filter(page => force || failedNumbers.has(Number(page.n)) || (!explicitPages && page.vision?.version !== VISION_LAYOUT_VERSION)).map(page => page.n)
@@ -53,26 +67,28 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
         },
       }, signal)
       check()
-      const selected = pageNumbers ? { ...current, pages: allPages.filter(page => pageNumbers.includes(page.n)) } : current
-      const layout=mineruLayout(selected,parsed.middle,{cached:parsed.cached,tier:parsed.tier}),failed=layout.pages.filter(page=>page.error).map(page=>({page:page.n,message:page.error}))
-      const targets = new Map(layout.pages.filter(canCheckFigureGeometry).map(page => [page.n, page]))
+      const base = restoreParagraphFlow(current)
+      const selected = pageNumbers ? { ...base, pages: allPages.filter(page => pageNumbers.includes(page.n)) } : base
+      const layout=mineruLayout(selected,parsed.middle,{cached:parsed.cached,tier:parsed.tier})
+      const targets = new Map(layout.pages.filter(page => !page.error && page.regions.some(region => region.kind === 'figure')).map(page => [page.n, page]))
+      const checked = new Map()
       if (targets.size) {
-        const sources = new Map(allPages.map(page => [page.n, page]))
         try {
-          await renderLayoutInkPages({ api, docId: doc.id, pageNumbers: [...targets.keys()], signal, onPage: (n, ink) => {
-            targets.set(n, checkFigureGeometry(sources.get(n), targets.get(n), ink))
+          await renderInkPages({ api, docId: doc.id, pageNumbers: [...targets.keys()], signal, onPage: (n, ink) => {
+            checked.set(n, constrainMediaCaptions(sources.get(n), targets.get(n), ink))
           } })
         } catch {
           check()
           // Rendering can fail on a locally parsed PDF. Keep its parser boxes.
         }
-        layout.pages = layout.pages.map(page => targets.get(page.n) ?? page)
       }
-      const applied=applyVisionLayout(current,layout)
+      layout.pages = layout.pages.map(page => checked.get(page.n) ?? constrainMediaCaptions(sources.get(Number(page.n)), page))
+      const failed=layout.pages.filter(page=>page.error).map(page=>({page:page.n,message:page.error,original:page.original}))
+      const applied=applyVisionLayout(base,layout)
       const failedPages = new Set(failed.map(page => page.page))
       const completed = applied.content.pages.filter(page => page.vision?.version === VISION_LAYOUT_VERSION && !failedPages.has(page.n))
       const complete = completed.length === allPages.length
-      await publish(()=>({...keepFailedPagesOriginal(applied.content,failed),aiRefined:true,visionLayoutStatus:complete?'complete':'partial',visionLayoutVersion:complete?VISION_LAYOUT_VERSION:undefined,visionLayoutAt:Date.now(),visionLayoutModel:layout.model,visionLayoutErrors:failed,visionLayoutPages:completed.length,visionLayoutRegions:completed.reduce((sum,page)=>sum+(page.vision?.regions??0),0),parser:{engine:'mineru',version:MINERU_LAYOUT_VERSION,parserVersion:layout.parserVersion,tier:parsed.tier,elapsedMs:parsed.elapsedMs,cached:parsed.cached,local:true,recovery:parsed.recovery}}))
+      await publish(()=>({...finishParagraphs(applied.content,null,failed),aiRefined:true,visionLayoutStatus:complete?'complete':'partial',visionLayoutVersion:complete?VISION_LAYOUT_VERSION:undefined,visionLayoutAt:Date.now(),visionLayoutModel:layout.model,visionLayoutErrors:failed,visionLayoutPages:completed.length,visionLayoutRegions:completed.reduce((sum,page)=>sum+(page.vision?.regions??0),0),parser:{engine:'mineru',version:MINERU_LAYOUT_VERSION,parserVersion:layout.parserVersion,tier:parsed.tier,elapsedMs:parsed.elapsedMs,cached:parsed.cached,local:true,recovery:parsed.recovery}}))
       onProgress({stage:'local-parser',done:allPages.length,total:allPages.length,engine:'mineru'})
       return {content:current,complete,errors:failed,cachedPages:parsed.cached?layout.pages.length:0,regions:applied.regions,model:layout.model}
     }catch(error){
@@ -84,6 +100,7 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
     }
   }
   onProgress({ stage: 'vision', done, total: allPages.length, errors: 0 })
+  let plan, planComplete = false
   try {
     await renderPages({ api, docId: doc.id, content, pageNumbers: pending, signal, captureInk: true, onPage: async (page, ink) => {
       check()
@@ -91,14 +108,18 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
       const task = (async () => {
         let result
         try {
-          result = await api.stream('ai.visionLayout', { docId: doc.id, title: doc.title, pages: [page], force }, {}, signal)
+          result = await api.stream('ai.visionLayout', { docId: doc.id, title: doc.title, pages: [page], force: force || retryFailed }, {}, signal)
           const answer = result?.pages?.find(value => Number(value.n) === Number(page.n))
           if (!answer || answer.error || !Array.isArray(answer.regions)) throw new Error(answer?.error ?? 'No visual result returned')
           model = result.model ?? model
           cachedPages += answer.cached ? 1 : 0
+          const checked = constrainMediaCaptions(sources.get(Number(page.n)), answer, ink)
+          if (checked.error) {
+            errors.push({ page: page.n, message: checked.error, original: checked.original })
+            return
+          }
           await publish(latest => {
-            const pages = result.pages.map(value => value === answer ? checkFigureGeometry(latest.pages.find(source => Number(source.n) === Number(value.n)), value, ink) : value)
-            const applied = applyVisionLayout(latest, { ...result, pages })
+            const applied = applyVisionLayout(restoreParagraphFlow(latest), { ...result, pages: [checked] })
             regions += applied.regions
             return { ...applied.content, aiRefined: true, parser: undefined, visionLayoutStatus: 'partial' }
           })
@@ -121,9 +142,10 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
     const windows = buildLayoutWindows(current)
     if (windows.length && errors.length === 0 && (pending.length || force || current.layoutPlanVersion !== LAYOUT_PLAN_VERSION)) {
       onProgress({ stage: 'paragraphs', done: 0, total: windows.length, cachedPages, errors: 0 })
-      const plan = await api.stream('ai.layoutPlan', { docId: doc.id, title: doc.title, windows, force }, { onProgress: progress => onProgress({ ...progress, stage: 'paragraphs', cachedPages, errors: 0 }) }, signal)
-      if (!plan || !Array.isArray(plan.windows) || plan.windows.some(window => window.error)) throw new Error('Paragraph structure is incomplete; retry the layout.')
-      await publish(latest => ({ ...applyLayoutPlan(latest, plan).content, layoutPlanAt: Date.now(), layoutPlanVersion: LAYOUT_PLAN_VERSION, layoutPlanModel: plan.model }))
+      plan = await api.stream('ai.layoutPlan', { docId: doc.id, title: doc.title, windows, force }, { onProgress: progress => onProgress({ ...progress, stage: 'paragraphs', cachedPages, errors: 0 }) }, signal)
+      const covered = new Set(plan?.windows?.filter(window => !window.error).map(window => window.id))
+      if (!windows.every(window => covered.has(window.id))) throw new Error('Paragraph structure is incomplete; retry the layout.')
+      planComplete = true
     }
   } catch (error) {
     if (signal?.aborted) throw error
@@ -133,7 +155,10 @@ export async function runVisualLayout({ api, doc, content, force = false, retryF
   check()
   const complete = errors.length === 0 && current.pages.every(page => page.vision?.version === VISION_LAYOUT_VERSION)
   await publish(latest => ({
-    ...keepFailedPagesOriginal(latest,errors), visionLayoutStatus: complete ? 'complete' : 'partial',
+    ...finishParagraphs(latest,plan,errors), visionLayoutStatus: complete ? 'complete' : 'partial',
+    layoutPlanAt: planComplete ? Date.now() : undefined,
+    layoutPlanVersion: planComplete ? LAYOUT_PLAN_VERSION : undefined,
+    layoutPlanModel: plan?.model,
     visionLayoutAt: complete ? Date.now() : undefined,
     visionLayoutVersion: complete ? VISION_LAYOUT_VERSION : undefined,
     visionLayoutModel: model, visionLayoutErrors: errors,

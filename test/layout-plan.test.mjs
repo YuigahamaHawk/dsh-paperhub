@@ -16,7 +16,7 @@ function test(name, fn) {
 function doc() {
   return {
     pages: [
-      { n: 1, blocks: [{ id: 'p1b0', kind: 'paragraph', text: 'First half of a paragraph' }, { id: 'p1b1', kind: 'paragraph', text: 'Second same-page paragraph.' }] },
+      { n: 1, blocks: [{ id: 'p1b1', kind: 'paragraph', text: 'A separate preceding paragraph.' }, { id: 'p1b0', kind: 'paragraph', text: 'First half of a paragraph' }] },
       { n: 2, blocks: [{ id: 'p2b0', kind: 'paragraph', text: 'continues here and ends.' }, { id: 'p2b1', kind: 'caption', text: 'Figure 1 A caption.' }] },
     ],
   }
@@ -34,8 +34,8 @@ test('windows overlap so a boundary paragraph is fully visible', () => {
 test('cross-page group merges text and keeps the first id', () => {
   const result = applyLayoutPlan(doc(), { windows: [{ groups: [['p1b0', 'p2b0']], captions: [] }] })
   assert.equal(result.merged, 1)
-  assert.equal(result.content.pages[0].blocks[0].id, 'p1b0')
-  assert.equal(result.content.pages[0].blocks[0].text, 'First half of a paragraph continues here and ends.')
+  assert.equal(result.content.pages[0].blocks[1].id, 'p1b0')
+  assert.equal(result.content.pages[0].blocks[1].text, 'First half of a paragraph continues here and ends.')
   assert.equal(result.content.pages[1].blocks.length, 1)
 })
 
@@ -94,6 +94,37 @@ test('hyphenated continuation joins without a duplicate hyphen', () => {
   const base = { pages: [{ n: 1, blocks: [{ id: 'a', kind: 'paragraph', text: 'inter-' }] }, { n: 2, blocks: [{ id: 'b', kind: 'paragraph', text: 'national text.' }] }] }
   const result = applyLayoutPlan(base, { windows: [{ groups: [['a', 'b']], captions: [] }] })
   assert.equal(result.content.pages[0].blocks[0].text, 'international text.')
+})
+
+test('rejects a plan that skips over real body text or jumps a failed page', () => {
+  const base = doc()
+  base.pages[0].blocks.reverse()
+  const plan = { windows: [{ groups: [['p1b0', 'p2b0']] }] }
+  assert.equal(applyLayoutPlan(base, plan, { inferContinuations: true }).merged, 0)
+  base.pages[0].blocks.pop()
+  base.pages.splice(1, 0, { n: 2, layoutFailed: true, blocks: [{ kind: 'pageFigure', id: 'unknown' }] })
+  base.pages[2].n = 3
+  assert.equal(applyLayoutPlan(base, plan, { inferContinuations: true }).merged, 0)
+})
+
+test('original float geometry and source-aligned math survive regrouping and retry', () => {
+  const record = (text, variable, before, after) => ({
+    source: text, segments: [{ type: 'text', text: before }, { type: 'math', source: variable, latex: variable, alignment: 'unique-prose-context' }, { type: 'text', text: after }],
+  })
+  const a = { id: 'a', kind: 'paragraph', text: 'The variable x measures',
+    sourceRect: { x: .1, y: .1, w: .7, h: .02 }, parserInlineMath: record('The variable x measures', 'x', 'The variable ', ' measures') }
+  const b = { id: 'b', kind: 'paragraph', text: 'motion and y is the result.',
+    sourceRect: { x: .1, y: .6, w: .7, h: .02 }, parserInlineMath: record('motion and y is the result.', 'y', 'motion and ', ' is the result.') }
+  const figure = { id: 'f', kind: 'figure', structure: 'figure', visionGenerated: true, visionRect: { x: .1, y: .2, w: .7, h: .3 } }
+  const base = { pages: [{ n: 1, blocks: [a, b, figure] }] }
+  const first = applyLayoutPlan(base, null, { inferContinuations: true }).content
+  const merged = first.pages[0].blocks[0]
+  assert.equal(merged.text, a.text + ' ' + b.text)
+  assert.deepEqual(merged.sourceIds, ['a', 'b'])
+  assert.equal(merged.parserInlineMath.source, merged.text)
+  assert.deepEqual(merged.parserInlineMath.segments.filter(segment => segment.type === 'math').map(segment => segment.source), ['x', 'y'])
+  assert.deepEqual(first.pages[0].blocks[1], figure)
+  assert.deepEqual(applyLayoutPlan(first, null, { inferContinuations: true }).content, first)
 })
 
 const failed = results.filter((entry) => entry.ok === false)

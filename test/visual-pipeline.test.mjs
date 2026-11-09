@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { runVisualLayout } from '../client-src/layout-pipeline.js'
 import { applyVisionLayout, VISION_LAYOUT_VERSION } from '../client-src/vision-layout.js'
+import { constrainMediaCaptions } from '../client-src/layout-captions.js'
 import { validateVisionPage } from '../shared/vision-contract.js'
 import { visionPageNumbers } from '../client-src/vision-render.js'
 import { ReaderStore } from '../host/store.js'
@@ -141,4 +142,116 @@ test('an AI-owned legend outside an approximate box is covered and not duplicate
   assert.ok(image.rect.y+image.rect.h>=.53)
   assert.ok(!result.content.pages[0].blocks.some(block=>block.id==='legend'&&block.kind==='paragraph'))
   assert.equal(result.content.pages[0].blocks.find(block=>block.id==='body').text,'Body remains selectable.')
+})
+
+const fromBox = ([x, y, right, bottom]) => ({ x, y, w: right - x, h: bottom - y })
+function interruptedDocument() {
+  const block = (page, id, text, bbox, kind = 'paragraph') => ({ page, id, text, kind, sourceRect: fromBox(bbox) })
+  return { kind: 'pdf', pages: [
+    { n: 1, blocks: [
+      block(1, 'a', 'The sensor measures', [.1, .17, .8, .19]),
+      block(1, 'cf', 'Figure 1: Two synchronized traces.', [.1, .24, .8, .26], 'caption'),
+      block(1, 'b', 'motion around the station and', [.1, .53, .8, .55]),
+      block(1, 'pn', '1', [.48, .96, .50, .98]),
+    ] },
+    { n: 2, blocks: [
+      block(2, 'ct', 'TABLE II: Accuracy by sensor.', [.1, .46, .8, .48], 'caption'),
+      block(2, 'c', 'reports every event to the monitor.', [.1, .72, .8, .74]),
+      block(2, 'h', '2. Results', [.1, .77, .5, .80], 'heading'),
+      block(2, 'd', 'The separate results are reported below.', [.1, .84, .8, .86]),
+    ] },
+  ] }
+}
+
+for (const engine of ['mineru', 'vision']) test(engine + ' publishes one caption per object and one complete paragraph across pages and floats', async () => {
+  const content = interruptedDocument()
+  const [a, cf, b, pn] = content.pages[0].blocks
+  const [ct, c, h, d] = content.pages[1].blocks
+  const left = [.11, .30, .43, .48], right = [.48, .30, .84, .48], table = [.11, .20, .83, .43], algo = [.11, .53, .83, .67]
+  const region = (kind, bbox, captionId) => ({ kind, bbox, captionId, candidateIds: [] })
+  const asBox = ({ x, y, w, h }) => [x, y, x + w, y + h]
+  const item = (block, type, index) => ({ type, index, bbox: asBox(block.sourceRect), content: block.text })
+  const middle = { pages: [
+    { page_idx: 0, blocks: [item(a, 'text', 0),
+      { type: 'image', index: 1, bbox: left, content: [{ type: 'image_body', bbox: left }, item(cf, 'image_caption', 2)] },
+      { type: 'image', index: 3, bbox: right, content: [{ type: 'image_body', bbox: right }] },
+      item(b, 'text', 4), item(pn, 'page_number', 5)] },
+    { page_idx: 1, blocks: [{ type: 'table', index: 0, bbox: table, content: [{ type: 'table_body', bbox: table }, item(ct, 'table_caption', 1)] },
+      { type: 'code', sub_type: 'algorithm', index: 2, bbox: algo }, item(c, 'text', 3), item(h, 'paragraph_title', 4), item(d, 'text', 5)] },
+  ] }
+  const replies = [
+    { n: 1, regions: [region('figure', left, 'cf'), region('figure', right, 'cf')], textBlocks: [a, cf, b, pn].map(block => ({ kind: block.kind, ids: [block.id] })) },
+    { n: 2, regions: [region('table', table, null), region('algorithm', algo)], textBlocks: [ct, c, h, d].map(block => ({ kind: block.kind, ids: [block.id] })) },
+  ]
+  const calls = []
+  const api = {
+    rpc: async method => method === 'parser.status' ? { engine } : {},
+    stream: async (method, params) => {
+      calls.push(method)
+      if (method === 'parser.parse') return { middle }
+      if (method === 'ai.visionLayout') return { pages: [replies[params.pages[0].n - 1]], model: 'test' }
+      return { windows: params.windows.map(window => ({ id: window.id, groups: [['a', 'b', 'c', 'd']], demoteCaptions: ['cf', 'ct'] })) }
+    },
+  }
+  const renderInkPages = async ({ onPage }) => onPage(1, { width: 100, height: 100, pixels: new Uint8Array(10000) })
+  const result = await runVisualLayout({ api, doc: { id: 'contract' }, content, renderPages, renderInkPages })
+  assert.equal(result.complete, true, JSON.stringify(result.errors))
+  const [first, second] = result.content.pages.map(page => page.blocks)
+  assert.equal(first[0].text, 'The sensor measures motion around the station and reports every event to the monitor.')
+  assert.deepEqual(first[0].continuedPages, [1, 2])
+  assert.deepEqual(first[0].sourceIds, ['a', 'b', 'c'])
+  assert.deepEqual(first.map(block => block.kind), ['paragraph', 'figure', 'caption'])
+  assert.equal(first[1].captionId, 'cf')
+  assert.equal(first[1].visionRect.w, .84 - .11)
+  assert.deepEqual(second.map(block => block.structure ?? block.kind), ['caption', 'table', 'algorithm', 'heading', 'paragraph'])
+  assert.equal(second[1].captionId, 'ct')
+  assert.equal(second[1].number, 'II')
+  assert.equal(second.at(-1).text, d.text)
+  if (engine === 'mineru') assert.deepEqual(calls, ['parser.parse'])
+  const retry = await runVisualLayout({ api, doc: { id: 'contract' }, content: result.content, force: true, renderPages, renderInkPages })
+  assert.deepEqual(retry.content.pages.map(page => page.blocks), [first, second])
+})
+
+test('an uncaptioned crop with only a body reference is kept as an original page and really retried', async () => {
+  const source = { id: 'ref', kind: 'caption', text: 'Figure 1 shows the readings.', sourceRect: fromBox([.12, .44, .8, .47]) }
+  const content = { pages: [{ n: 1, blocks: [source], sourceBlocks: [source] }] }
+  const calls = []
+  let corrected = false
+  const api = {
+    rpc: async () => ({}),
+    stream: async (method, params) => {
+      if (method === 'ai.layoutPlan') return { windows: params.windows.map(({ id }) => ({ id, groups: [] })) }
+      calls.push(params.force)
+      const caption = { ...source, id: 'caption', text: 'Figure 1. Readings by time.' }
+      return { pages: [{ n: 1, sourceBlocks: corrected ? [source, caption] : [source], regions: [
+        { kind: 'figure', bbox: [.1, .14, .85, .43], captionId: corrected ? 'caption' : 'ref', number: '1' },
+      ], textBlocks: corrected ? [{ ids: ['caption'], kind: 'caption' }] : [], captionFixes: [{ id: 'ref', kind: 'paragraph' }] }] }
+    },
+  }
+  const doc = { id: 'caption-retry' }
+  const first = await runVisualLayout({ api, doc, content, renderPages })
+  assert.equal(first.complete, false)
+  assert.equal(first.content.pages[0].blocks[0].kind, 'pageFigure')
+  assert.deepEqual(first.content.pages[0].sourceBlocks, [source])
+  assert.match(first.errors[0].message, /unique caption/)
+  corrected = true
+  const next = await runVisualLayout({ api, doc, content: first.content, retryFailed: true, renderPages })
+  assert.equal(next.complete, true, JSON.stringify(next.errors))
+  assert.deepEqual(calls, [false, true])
+  assert.equal(next.content.pages[0].blocks.find(block => block.id === 'ref').kind, 'paragraph')
+})
+
+test('omitting a crop cannot silently turn its native caption into a paragraph', () => {
+  const page = { n: 1, blocks: [{ id: 'cap', kind: 'caption', text: 'Figure 2. A set of measurements.' }] }
+  const result = constrainMediaCaptions(page, { n: 1, regions: [], textBlocks: [{ ids: ['cap'], kind: 'paragraph' }] })
+  assert.match(result.error, /figure for its caption 2/)
+  assert.equal(result.original, true)
+})
+
+test('an algorithm caption is independent of the figure and table contract', () => {
+  const page = { n: 1, blocks: [{ id: 'cap', kind: 'caption', text: 'Algorithm 1. Monitoring and recovery.' }] }
+  const result = constrainMediaCaptions(page, { n: 1, regions: [{ kind: 'algorithm', bbox: [.1, .1, .9, .4], captionId: 'cap' }],
+    textBlocks: [{ ids: ['cap'], kind: 'caption', captionKind: 'algorithm' }] })
+  assert.equal(result.error, undefined)
+  assert.equal(result.regions[0].captionId, 'cap')
 })

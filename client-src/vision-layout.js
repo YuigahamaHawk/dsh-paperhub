@@ -49,6 +49,29 @@ function mergeGroups(blocks, groups) {
   return ordered
 }
 
+function orderCaptionPairs(blocks) {
+  const captions = new Map()
+  for (const block of blocks) {
+    if (block.kind !== 'caption') continue
+    for (const id of [block.id, ...(block.sourceIds ?? [])]) captions.set(id, block.id)
+  }
+  const byCaption = new Map(), paired = new Set()
+  for (const block of blocks) {
+    if (!['figure', 'table'].includes(block.structure)) continue
+    const captionId = captions.get(block.captionId)
+    if (!captionId || byCaption.has(captionId)) continue
+    block.captionId = captionId
+    byCaption.set(captionId, block)
+    paired.add(block)
+  }
+  return blocks.flatMap(block => {
+    if (paired.has(block)) return []
+    const asset = byCaption.get(block.id)
+    if (!asset) return [block]
+    return asset.structure === 'table' ? [block, asset] : [asset, block]
+  })
+}
+
 // Rebuild successful pages from immutable candidates, so earlier geometry cannot
 // delete prose and another run cannot duplicate or overwrite unrelated assets.
 export function applyVisionLayout(content, result) {
@@ -168,9 +191,10 @@ export function applyVisionLayout(content, result) {
       if (at < 0) at = position >= 0 ? Math.min(position, blocks.length) : blocks.length
       blocks.splice(at, 0, block)
     }
-    page.blocks = blocks
+    page.blocks = orderCaptionPairs(blocks)
     page.layoutFailed=false
-    page.vision = { version: VISION_LAYOUT_VERSION, engine:answer.source??'vision',at: Date.now(), cached: answer.cached === true, model: result.model ?? '', evidence: answer.evidence ?? null, request: answer.request ?? null, regions: assets.length }
+    page.layoutError=undefined
+    page.vision = { version: VISION_LAYOUT_VERSION, engine:answer.source??'vision',at: Date.now(), cached: answer.cached === true, model: result.model ?? '', evidence: answer.evidence ?? null, request: answer.request ?? null, regions: assets.length, mediaContract: answer.mediaContract }
     pages++
   }
   next.figurePages = next.pages.filter(page => page.blocks.some(isImage)).map(page => page.n)

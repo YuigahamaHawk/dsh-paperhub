@@ -965,13 +965,12 @@ export class AiGateway {
     const system = [
       'You are a document structure engine for a PDF reader.',
       'Input JSON: {"title": string, "pages":[{"n": number, "blocks":[{"id": string, "kind": string, "text": string}]}]}.',
-      'Return STRICT JSON only: {"groups": [[blockId, ...]], "captions": [blockId], "demoteCaptions": [blockId], "openTail": [blockId]}.',
+      'Return STRICT JSON only: {"groups": [[blockId, ...]]}.',
       'Rules:',
-      '- A group is ONE natural paragraph; list its block ids in reading order, including a paragraph that continues across a page break or around a heading/caption boundary.',
-      '- Only paragraph/list blocks may appear in groups. Never put headings, figure blocks, formula blocks or captions in a group.',
-      '- captions: ids of blocks that are actual figure/table captions ("Figure 2 ...", "Table 1 ..."), even when long.',
-      '- demoteCaptions: ids of blocks that START with "Figure/Table N" but are body prose referencing the figure (for example "Figure 3 reports decode throughput..."). They must stay paragraphs.',
-      '- openTail: ids of the last group when its sentence is unfinished at the end of this window; otherwise [].',
+      '- A group is ONE natural paragraph. List its consecutive body block IDs in reading order, including fragments separated by page breaks or inserted figures, tables, algorithms and captions.',
+      '- Only paragraph blocks may appear in groups. Never add headings, captions, list items, formulas or any visual block to a group.',
+      '- A page break or inserted object can fall between sentences of one paragraph. Join only when the prose genuinely continues; never skip over other body text or a heading.',
+      '- Captions are already paired with their figures and tables. Do not reclassify them.',
       '- Never invent ids, never rewrite text, never merge separate paragraphs. Use only ids present in the input.',
       '- No markdown, no prose, no code fences.',
     ].join('\n')

@@ -1,6 +1,7 @@
 export const VISION_LAYOUT_VERSION = 4
 export const VISUAL_KINDS = new Set(['figure', 'table', 'formula', 'algorithm', 'code', 'listing', 'theorem', 'definition', 'proof', 'box', 'other'])
 const TEXT_KINDS = new Set(['paragraph', 'heading', 'caption', 'footnote', 'list', 'quote', 'artifact'])
+const IMAGE_KINDS = new Set(['figure', 'table', 'formula', 'algorithm'])
 
 export function validBox(value) {
   if (!Array.isArray(value) || value.length !== 4) return null
@@ -31,7 +32,7 @@ export function validateVisionPage(parsed, page) {
       candidateIds: ids(value.candidateIds).filter(id => id !== captionId), captionId,
       afterBlockId: known.has(value.afterBlockId) ? value.afterBlockId : null,
       number: value.number === null || value.number === undefined ? null : String(value.number).replace(/^\(|\)$/g, '').slice(0, 30),
-      renderAs: value.renderAs === 'text' && value.kind !== 'formula' && value.kind !== 'table' ? 'text' : 'image',
+      renderAs: value.renderAs === 'text' && !IMAGE_KINDS.has(value.kind) ? 'text' : 'image',
     })
   }
   if (parsed.regions.length > 0 && regions.length === 0) throw new Error('All visual regions failed validation; the old layout was kept.')
