@@ -46,8 +46,6 @@
 
 ![带着图文向 AI 助手提问](docs/media/assistant.gif)
 
-<sub>翻译与问答动图使用自制文档，回复为演示示例。</sub>
-
 ### 批注与导出
 
 选中文字即可高亮或添加批注，之后可以在左栏找到原文并修改笔记。显示译文时，**更多 → 导出全文** 会将原文与已有译文逐段写入 Markdown，例如中英对照版。也可以单独导出读书笔记和 AI 摘要。
@@ -64,23 +62,14 @@
 
 ## 快速开始
 
-安装 DeepSeek Harness 桌面版后，在左栏打开 **插件 → 添加插件**，粘贴下面的包名安装最新正式版。 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+安装 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)后，在左栏打开 **插件 → 添加插件**，粘贴下面的包名安装最新正式版。
 
 ```text
 @yuigahamahawk/dsh-paperhub@latest
 ```
 
-也可以在同一个输入框粘贴 GitHub Release 的安装包地址。
+在 **插件** 页确认 dsh-paperhub 已启用，再从左侧打开 **Library（书库）**。点击 **导入** 加入第一篇 PDF 或 EPUB。打开文献后，PDF 可切换 **精排 / 原版**，点击顶部的翻译按钮开始对照阅读。
 
-```text
-https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paperhub.tgz
-```
-
-重启 DSH，在 **插件** 页确认 dsh-paperhub 已启用，再从左侧打开 **Library（书库）**。点击 **导入** 加入第一篇 PDF 或 EPUB。打开文献后，PDF 可切换 **精排 / 原版**，点击顶部的翻译按钮开始对照阅读。
-
-需要固定版本时，将 `@latest` 换成对应的版本号，例如 `@yuigahamahawk/dsh-paperhub@1.0.7`。 [发行记录](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
-
-从 1.0.6 或更早的版本升级到 1.0.7 时，请先备份书库并退出 DSH，再移除旧插件 `@local/dsh-reader` 和安装新包。首次打开会把原文、批注、设置和缓存随书库目录迁到 `dsh-paperhub`。
 
 ## 模型选择
 

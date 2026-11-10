@@ -46,8 +46,6 @@ Select text, a figure or table, or a key point, then choose **Ask** to attach it
 
 ![Asking the AI assistant about text or a figure](docs/media/assistant.gif)
 
-<sub>The translation and Q&A clips use a sample document and scripted responses.</sub>
-
 ### Annotations and export
 
 Highlight selected text or attach a note, then use the sidebar to return to the passage and edit the note. With translations visible, **More → Export full text** writes the original paragraphs and their available translations to Markdown in reading order. Reading notes and AI summaries can be exported separately.
@@ -64,23 +62,13 @@ Reflowed layouts, translations, and reading highlights are saved locally. Reopen
 
 ## Quick start
 
-Install DeepSeek Harness Desktop. Open **Plugins → Add plugin** from the sidebar and paste this package spec to install the latest stable release. [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+After installing [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop), open **Plugins → Add plugin** from the sidebar and paste the package spec below to install the latest stable release.
 
 ```text
 @yuigahamahawk/dsh-paperhub@latest
 ```
 
-You can also paste the GitHub Release package URL into the same field.
-
-```text
-https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paperhub.tgz
-```
-
-Restart DSH and confirm that **dsh-paperhub** is enabled on the Plugins page. Open **Library** from the sidebar, then choose **Import** to add a PDF or EPUB. For a PDF, use **Reflow / Original** to switch views. Use the translation button in the toolbar to start bilingual reading.
-
-To pin a version, replace `@latest` with the version number, for example `@yuigahamahawk/dsh-paperhub@1.0.7`. [Release history](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
-
-When upgrading from 1.0.6 or earlier to 1.0.7, back up your library and quit DSH. Remove the old `@local/dsh-reader` package, then install the new one. On first launch, PaperHub moves the library to `dsh-paperhub`, including originals, annotations, settings, and caches.
+Confirm that **dsh-paperhub** is enabled on the **Plugins** page, then open **Library** from the sidebar and choose **Import** to add your first PDF or EPUB. After opening a PDF, use **Reflow / Original** to switch views. Select the translation button in the toolbar to start bilingual reading.
 
 ## Model selection
 
