@@ -8,6 +8,7 @@ import { DEFAULT_LIBRE_URL, normalizeLibreUrl, TRANSLATION_ENGINES } from '../sh
 import {
   appendJsonLine,
   ensureReaderDirs,
+  migrateReaderDataDir,
   readJsonFile,
   readerDataDir,
   readerPaths,
@@ -282,9 +283,10 @@ function normalizeFolder(raw) {
 
 /** The reader's persistent state. One instance per host plugin activation. */
 export class ReaderStore {
-  constructor(dataDir = readerDataDir()) {
-    this.paths = readerPaths(dataDir)
-    this.dataDir = dataDir
+  constructor(dataDir) {
+    this.usesDefaultDataDir = dataDir === undefined
+    this.dataDir = this.usesDefaultDataDir ? readerDataDir() : dataDir
+    this.paths = readerPaths(this.dataDir)
     this.ready = false
     this.library = { version: LIBRARY_VERSION, docs: [], folders: [] }
     this.settings = defaultSettings()
@@ -298,6 +300,7 @@ export class ReaderStore {
     if (this.ready) return this
     if (this.initializing !== null) return this.initializing
     this.initializing = (async () => {
+      if (this.usesDefaultDataDir) await migrateReaderDataDir(this.dataDir)
       await ensureReaderDirs(this.paths)
       const [libraryRaw, settingsRaw] = await Promise.all([
         readJsonFile(this.paths.library, null),
@@ -321,7 +324,10 @@ export class ReaderStore {
       this.ready = true
       this.cleanupTemp().catch(() => undefined)
       return this
-    })()
+    })().catch(error => {
+      this.initializing = null
+      throw error
+    })
     return this.initializing
   }
 

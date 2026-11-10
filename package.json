@@ -1,8 +1,11 @@
 {
-  "name": "@local/dsh-reader",
-  "version": "1.0.6",
+  "name": "@yuigahamahawk/dsh-paperhub",
+  "version": "1.0.7",
   "license": "MIT",
-  "private": true,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "type": "module",
   "description": "An AI-powered literature library and reader for DeepSeek Harness with PDF and EPUB import, bilingual reading, annotations, and Zotero sync.",
   "repository": {

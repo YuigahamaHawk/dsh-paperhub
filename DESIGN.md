@@ -1,4 +1,4 @@
-# dsh-paperhub (`@local/dsh-reader`) — build & integration contract
+# dsh-paperhub (`@yuigahamahawk/dsh-paperhub`) — build & integration contract
 
 A persistent DSH bundle that adds a **left-sidebar entry** and a **full main-panel immersive reader +
 library**. Paths in this document are relative to the plugin repository unless otherwise stated.
@@ -33,13 +33,14 @@ Package dir: `reader-plugin/`. Install with `plugin_manager install_bundle` (tar
   `--dsw-alias-bg-overlay`, `--dsw-alias-border-l1/l2`, `--dsw-alias-brand-primary`,
   `--dsw-alias-label-primary`, `--dsw-alias-label-secondary`, `--dsw-alias-state-*`. Reader paper colors are
   CSS variables set by the app (`--dr-paper-bg`, `--dr-paper-fg`, `--dr-paper-muted`).
-- All data lives host-side under `$DSH_HOME/dsh-reader/`; client re-fetches on mount. AI output and
-  translations are cached host-side so reopening a document costs no repeated tokens.
+- All data lives host-side under `$DSH_HOME/dsh-paperhub/`. On upgrade, the store renames the
+  legacy directory before initializing storage. If both directories exist, it reports the conflict
+  and preserves both. The client fetches saved results on mount.
 
 ## Data dir layout
 
 ```
-$DSH_HOME/dsh-reader/
+$DSH_HOME/dsh-paperhub/
   settings.json                 # { appearance, ai, zotero, ui }
   library.json                  # { version:1, docs: DocMeta[], folders: Folder[] }
   docs/<id>/original.<pdf|epub>
@@ -284,7 +285,7 @@ temporary cjs (`platform=browser`, `format=cjs`, `external:react`, `--jsx=automa
 React.createElement is available: use classic JSX transform `--jsx=transform` which requires React in scope;
 keep `import React from 'react'` in every .jsx file) then wraps into `client.js`:
 ```js
-window.__ModuleLoader__.load({ id: '@local/dsh-reader', factory(require) { ...cjs code... return module.exports; } });
+window.__ModuleLoader__.load({ id: '@yuigahamahawk/dsh-paperhub', factory(require) { ...cjs code... return module.exports; } });
 ```
 Also copies pdf.js assets from `node_modules/pdfjs-dist/legacy/build/{pdf.mjs,pdf.worker.mjs}` plus
 `cmaps/` and `standard_fonts/` into `assets/pdf/`. `index.js` serves them.
@@ -305,6 +306,6 @@ Also copies pdf.js assets from `node_modules/pdfjs-dist/legacy/build/{pdf.mjs,pd
     ReaderApp off-screen, opens a temporary EPUB and PDF through the actual card click, asserts reader DOM).
   - Slot confirmation: `sidebar.panellist` id `reader`, `main` key `reader` both `active: true`.
   - Auto diagnostics: every client activation runs `self-test` + `render-test` and posts to
-    `$DSH_HOME/dsh-reader/diagnostics.jsonl`.
+    `$DSH_HOME/dsh-paperhub/diagnostics.jsonl`.
 - Host code reload during development without restarting the app: toggle the bundle off/on in Plugin
   Manager (`plugin_manager set_bundle`); client `client.js` changes are hot-swapped by Client HMR.

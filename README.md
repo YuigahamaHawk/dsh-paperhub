@@ -64,7 +64,13 @@
 
 ## 快速开始
 
-安装 DeepSeek Harness 桌面版后，在左栏打开 **插件 → 添加插件**，粘贴以下地址安装最新正式版。 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+安装 DeepSeek Harness 桌面版后，在左栏打开 **插件 → 添加插件**，粘贴下面的包名安装最新正式版。 [DeepSeek Harness 桌面版](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+
+```text
+@yuigahamahawk/dsh-paperhub@latest
+```
+
+也可以在同一个输入框粘贴 GitHub Release 的安装包地址。
 
 ```text
 https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paperhub.tgz
@@ -72,7 +78,9 @@ https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paper
 
 重启 DSH，在 **插件** 页确认 dsh-paperhub 已启用，再从左侧打开 **Library（书库）**。点击 **导入** 加入第一篇 PDF 或 EPUB。打开文献后，PDF 可切换 **精排 / 原版**，点击顶部的翻译按钮开始对照阅读。
 
-需要固定版本时，从发行页面选定标签，再用 `github:YuigahamaHawk/dsh-paperhub#<标签>` 安装。[GitHub Releases](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
+需要固定版本时，将 `@latest` 换成对应的版本号，例如 `@yuigahamahawk/dsh-paperhub@1.0.7`。 [发行记录](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
+
+从 1.0.6 或更早的版本升级到 1.0.7 时，请先备份书库并退出 DSH，再移除旧插件 `@local/dsh-reader` 和安装新包。首次打开会把原文、批注、设置和缓存随书库目录迁到 `dsh-paperhub`。
 
 ## 模型选择
 
@@ -106,17 +114,24 @@ uv pip install --python .\.venv\Scripts\python.exe "mineru==4.1.7"
 
 ## 开发
 
-准备 Node.js 20 或更新版本。克隆仓库后，在源码目录执行安装、测试和构建。
+准备 Node.js 24 LTS。克隆源码，用 `npm ci` 安装锁文件中的依赖，再构建并运行测试。
 
 ```sh
 git clone https://github.com/YuigahamaHawk/dsh-paperhub.git
 cd dsh-paperhub
 npm ci
-npm test
 npm run build
+npm test
 ```
 
-在 DSH 的 **添加插件** 中填入源码目录的绝对路径，将其作为本地插件安装。重启 DSH 后即可试用。
+先启动 DSH 桌面版一次，让它初始化桌面配置，再完全退出。在源码目录运行下面的 PowerShell 命令，将当前目录链接到 DSH。 [DSH 插件安装文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md#install-into-a-profile)
+
+```powershell
+$source = (Get-Location).Path.Replace('\', '/')
+dsh plugin --profile desktop add "link:$source"
+```
+
+重新打开 DSH 后，从侧栏进入 **书库**。后续修改源码时，运行 `npm run build` 并重新启动 DSH，即可加载本地构建。
 
 欢迎提交问题和 PR。复现文档问题时，可附 DSH 版本、解析引擎以及可公开的最小 PDF 或 EPUB 样本。[项目结构和开发约束](AGENTS.md)
 

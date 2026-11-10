@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ReaderStore } from '../host/store.js'
@@ -42,6 +42,45 @@ async function main() {
     )
     return jsonOf(response)
   }
+
+  await test('default storage moves the complete legacy library once and preserves conflicting directories', async () => {
+    const previous = process.env.DSH_HOME
+    const home = join(dir, 'migration')
+    const legacyDir = join(home, 'dsh-reader')
+    const paperhubDir = join(home, 'dsh-paperhub')
+    try {
+      process.env.DSH_HOME = home
+      const legacy = new ReaderStore(legacyDir)
+      await legacy.init()
+      const original = join(legacyDir, 'sample.pdf')
+      await writeFile(original, '%PDF-1.4 migration fixture')
+      await legacy.addDoc({ id: 'migration-test', name: 'Sample.pdf', format: 'pdf', storedPath: original,
+        content: { kind: 'pdf', pageCount: 1, pages: [] } })
+      await legacy.saveAnnotations('migration-test', [{ id: 'note', note: 'Keep this note',
+        target: { kind: 'reflow', blockId: 'p1', start: 0, end: 1 } }])
+      await legacy.setCachedTranslation('fixture', 'cached translation')
+      await legacy.patchSettings({ appearance: { fontSize: 22 } })
+      const [migrated, second] = await Promise.all([new ReaderStore().init(), new ReaderStore().init()])
+      assert.equal(migrated.dataDir, paperhubDir)
+      assert.equal(second.getDoc('migration-test').title, 'Sample')
+      assert.equal((await migrated.getAnnotations('migration-test'))[0].note, 'Keep this note')
+      assert.equal(await migrated.getCachedTranslation('fixture'), 'cached translation')
+      assert.equal(migrated.getSettings().appearance.fontSize, 22)
+      assert.equal(await readFile(migrated.paths.original('migration-test', 'pdf'), 'utf8'), '%PDF-1.4 migration fixture')
+      await assert.rejects(stat(legacyDir), { code: 'ENOENT' })
+
+      await mkdir(legacyDir)
+      const marker = join(legacyDir, 'keep.txt')
+      await writeFile(marker, 'a second library')
+      const conflicted = new ReaderStore()
+      await assert.rejects(conflicted.init(), /two library paths/)
+      assert.equal(await readFile(marker, 'utf8'), 'a second library')
+      assert.equal(await readFile(migrated.paths.original('migration-test', 'pdf'), 'utf8'), '%PDF-1.4 migration fixture')
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+    }
+  })
 
   await test('settings default + patch + clamp', async () => {
     const before = store.getSettings()

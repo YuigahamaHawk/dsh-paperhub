@@ -1,8 +1,8 @@
 // Reader data directory and atomic JSON persistence.
 //
-// Everything the reader owns lives under $DSH_HOME/dsh-reader so it survives app restarts
+// Everything the reader owns lives under $DSH_HOME/dsh-paperhub so it survives app restarts
 // and upgrades. Writes are atomic (tmp file + rename) and serialized per target path.
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -10,7 +10,34 @@ import { dirname, join } from 'node:path'
 export function readerDataDir() {
   const home = process.env.DSH_HOME?.trim()
   const base = home !== undefined && home !== '' ? home : join(homedir(), '.dsh')
-  return join(base, 'dsh-reader')
+  return join(base, 'dsh-paperhub')
+}
+
+async function pathEntry(path) {
+  try {
+    return await lstat(path)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/** Move the original library before any new directory is created. */
+export async function migrateReaderDataDir(dataDir) {
+  const legacyDir = join(dirname(dataDir), 'dsh-reader')
+  const legacy = await pathEntry(legacyDir)
+  if (!legacy) return
+  if (!legacy.isDirectory() && !legacy.isSymbolicLink()) throw new Error(`PaperHub expected a library directory at "${legacyDir}".`)
+  if (await pathEntry(dataDir)) {
+    // Another activation may have already moved the library.
+    if (!await pathEntry(legacyDir)) return
+    throw new Error(`PaperHub found two library paths. Back up and reconcile "${legacyDir}" and "${dataDir}" before opening the library.`)
+  }
+  try {
+    await rename(legacyDir, dataDir)
+  } catch (error) {
+    if (error?.code !== 'ENOENT' || await pathEntry(legacyDir) || !await pathEntry(dataDir)) throw error
+  }
 }
 
 /** Directory paths owned by the reader. */

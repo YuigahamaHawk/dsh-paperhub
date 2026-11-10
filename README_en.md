@@ -64,7 +64,13 @@ Reflowed layouts, translations, and reading highlights are saved locally. Reopen
 
 ## Quick start
 
-Install DeepSeek Harness Desktop. Open **Plugins → Add plugin** from the sidebar and paste this address to install the latest stable release. [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+Install DeepSeek Harness Desktop. Open **Plugins → Add plugin** from the sidebar and paste this package spec to install the latest stable release. [DeepSeek Harness Desktop](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)
+
+```text
+@yuigahamahawk/dsh-paperhub@latest
+```
+
+You can also paste the GitHub Release package URL into the same field.
 
 ```text
 https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paperhub.tgz
@@ -72,7 +78,9 @@ https://github.com/YuigahamaHawk/dsh-paperhub/releases/latest/download/dsh-paper
 
 Restart DSH and confirm that **dsh-paperhub** is enabled on the Plugins page. Open **Library** from the sidebar, then choose **Import** to add a PDF or EPUB. For a PDF, use **Reflow / Original** to switch views. Use the translation button in the toolbar to start bilingual reading.
 
-To pin a version, choose a release tag and install with `github:YuigahamaHawk/dsh-paperhub#<tag>`. [GitHub Releases](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
+To pin a version, replace `@latest` with the version number, for example `@yuigahamahawk/dsh-paperhub@1.0.7`. [Release history](https://github.com/YuigahamaHawk/dsh-paperhub/releases)
+
+When upgrading from 1.0.6 or earlier to 1.0.7, back up your library and quit DSH. Remove the old `@local/dsh-reader` package, then install the new one. On first launch, PaperHub moves the library to `dsh-paperhub`, including originals, annotations, settings, and caches.
 
 ## Model selection
 
@@ -106,17 +114,24 @@ Sign in to WorkBuddy, then install and enable **dsh-connect-workbuddy** from **A
 
 ## Development
 
-Install Node.js 20 or later, clone the repository, and run the checks and build from the checkout.
+Install Node.js 24 LTS. Clone the repository, use `npm ci` to install the dependencies from the lockfile, then build and run the tests.
 
 ```sh
 git clone https://github.com/YuigahamaHawk/dsh-paperhub.git
 cd dsh-paperhub
 npm ci
-npm test
 npm run build
+npm test
 ```
 
-In DSH, open **Add plugin** and enter the absolute path to the checkout to install it locally. Restart DSH after building to try the updated plugin.
+Open DSH Desktop once to initialize its desktop profile, then quit it completely. Run these PowerShell commands from the checkout to link it to DSH. [DSH plugin installation guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md#install-into-a-profile)
+
+```powershell
+$source = (Get-Location).Path.Replace('\', '/')
+dsh plugin --profile desktop add "link:$source"
+```
+
+Open DSH again and select **Library** from the sidebar. After changing the source, run `npm run build` and restart DSH to load the local build.
 
 Issues and pull requests are welcome. For document-specific bugs, include the DSH version, the parsing engine, and a minimal PDF or EPUB you can share publicly. [Architecture and development notes](AGENTS.md)
 

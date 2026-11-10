@@ -1,4 +1,4 @@
-// Client entry for @local/dsh-reader.
+// Client entry for dsh-paperhub.
 //
 // Registers the left-sidebar entry (`sidebar.panellist` id "reader"), the main-panel reader
 // (`main` key "reader"), the shared stylesheet, a live diagnostics inspect provider and a
@@ -81,7 +81,7 @@ function activate(ctx) {
 
   ctx.effect(() => {
     const tag = document.createElement('style')
-    tag.dataset.reader = '@local/dsh-reader'
+    tag.dataset.reader = 'dsh-paperhub'
     tag.textContent = READER_CSS
     document.head.append(tag)
     return () => {

@@ -1,7 +1,7 @@
-// Host half of @local/dsh-reader.
+// Host half of dsh-paperhub.
 //
 // Responsibilities:
-//  - owns the reader data directory ($DSH_HOME/dsh-reader) and all persistence
+//  - owns the reader data directory ($DSH_HOME/dsh-paperhub) and all persistence
 //  - exposes its capabilities to the browser half through authenticated Fetch routes
 //    (ctx.connection.fetch.register) mounted under /api/dsh-reader/*
 //  - serves pdf.js static assets through a plain read-only prefix route

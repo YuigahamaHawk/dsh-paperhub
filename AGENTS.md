@@ -4,7 +4,7 @@
 
 ## 项目定位
 
-dsh-paperhub（智能文献库与阅读器）是 DeepSeek Harness 的本地文献库与阅读插件，沿用 `@local/dsh-reader` 标识以兼容已安装实例。目标是让用户完成文献入库、多篇切换、精排与原版对照、双语阅读、图表查看、来源定位、批注和导出，并能控制模型调用成本。
+dsh-paperhub（智能文献库与阅读器）是 DeepSeek Harness 的本地文献库与阅读插件，包名为 `@yuigahamahawk/dsh-paperhub`。目标是让用户完成文献入库、多篇切换、精排与原版对照、双语阅读、图表查看、来源定位、批注和导出，并能控制模型调用成本。
 
 产品优先级：原文与数学结构完整、阅读顺序正确、来源可核验、操作稳定，然后才是处理速度和额外 AI 功能。原始 PDF/EPUB 始终保留；模型或解析器的请求成功，不代表排版、翻译或研究结论正确。
 
@@ -79,7 +79,7 @@ MinerU 接线、研究重点卡片等是否已完成正式验收，查看交接�
 
 ## 数据与模型边界
 
-数据根目录为 `$DSH_HOME/dsh-reader/`，未设置 `DSH_HOME` 时为用户目录下的 `.dsh/dsh-reader/`。路径以 `host/paths.js` 为准：
+数据根目录为 `$DSH_HOME/dsh-paperhub/`，未设置 `DSH_HOME` 时为用户目录下的 `.dsh/dsh-paperhub/`。路径以 `host/paths.js` 为准。升级时，完整退出 DSH，移除旧包 `@local/dsh-reader`，再安装新包。新版本在创建存储目录前将旧的 `dsh-reader` 数据目录原地改名；若两目录同时存在，会报告冲突并保留两份数据。
 
 - `library.json`、`settings.json`：书库元数据和用户设置。
 - `docs/<id>/original.pdf|epub`、`content.json`、`annotations.json`、`aux.json`：原文件、正文、批注、摘要/重点/聊天等辅助内容。
@@ -136,7 +136,7 @@ UI 和解析变更须在隔离书库使用真实客户端验收。核对完整�
 
 源码仓库位于 `https://github.com/YuigahamaHawk/dsh-paperhub`。`main` 保存已验证基线，未完成的改动使用开发分支并标明状态。公开前检查所有可访问分支、标签及历史提交中的凭据、个人信息和私有资料，并核对分发材料的许可。推送采用快进方式，保留既有提交。
 
-两份 README 的最新版安装地址指向 GitHub Releases。正式发行时，在构建并验证后使用 `npm pack` 打包，将安装包以固定文件名 `dsh-paperhub.tgz` 上传，再公开该发行版。
+两份 README 使用 `@yuigahamahawk/dsh-paperhub@latest` 安装正式版，并提供 GitHub Releases 的安装包地址。正式发行时，在构建并验证后使用 `npm pack` 打包。同一份包发布到 npm 的 `latest`，并以固定文件名 `dsh-paperhub.tgz` 上传至对应的 GitHub Release。
 
 接手时先检查分支、工作区差异、`package.json` 和交接记录，再定位相关实现；不要重做已验证步骤，也不要因交接文字说“通过”就忽略当前代码变化。提交说明写清问题、行为变化、验证结果与尚未解决的限制。推送前检查跟踪文件，排除凭据、用户书库及本机输出。
 
